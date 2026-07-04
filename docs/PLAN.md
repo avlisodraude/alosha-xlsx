@@ -12,7 +12,7 @@
 
 ## Current status
 
-**Stage 1.1 — CI + fflate foundation**
+**Stage 1.2 — ZIP layer**
 
 Stage 0 (foundation, build tooling, test harness) is complete:
 - Repo scaffold: ✅ package.json, tsconfig.json (strict), tsup/vitest/biome configs
@@ -21,9 +21,13 @@ Stage 0 (foundation, build tooling, test harness) is complete:
 - Lint/format: ✅ Biome configured (check + format scripts)
 - Git: ✅ chore/scaffold branch with initial commit
 
-Stage 1.1 adds:
+Stage 1.1 added:
 - CI: ✅ GitHub Actions workflow (lint, typecheck, test) on push/PR + manual dispatch
-- fflate: ✅ added as dev dependency; `src/zip-layer.ts` stub in place for Stage 1.2
+- fflate: ✅ added as dependency; `src/zip-layer.ts` stub in place for Stage 1.2
+
+Stage 1.2 adds:
+- ZIP layer: ✅ `readZipArchive`/`writeZipArchive` in `src/zip-layer.ts`, backed by fflate's
+  `unzipSync`/`zipSync`, operating on `Map<string, Uint8Array>` entries. Round-trip tested.
 
 ## Roadmap (high level)
 
