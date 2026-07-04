@@ -50,6 +50,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.3.4",
     "@types/node": "^22.10.0",
+    "fflate": "^0.8.3",
     "tsup": "^8.5.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"

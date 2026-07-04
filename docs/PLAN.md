@@ -12,13 +12,18 @@
 
 ## Current status
 
-**Stage 0 VERIFIED DONE (Jul 4 2026):** Foundation, build tooling, and test harness complete.
+**Stage 1.1 — CI + fflate foundation**
+
+Stage 0 (foundation, build tooling, test harness) is complete:
 - Repo scaffold: ✅ package.json, tsconfig.json (strict), tsup/vitest/biome configs
 - Dual build: ✅ ESM (index.js) + CJS (index.cjs) + type declarations generated
 - Test harness: ✅ vitest with 3 passing placeholder tests
 - Lint/format: ✅ Biome configured (check + format scripts)
 - Git: ✅ chore/scaffold branch with initial commit
-- Missing only: GitHub Actions CI/workflows (deferred to Stage 1 polish)
+
+Stage 1.1 adds:
+- CI: ✅ GitHub Actions workflow (lint, typecheck, test) on push/PR + manual dispatch
+- fflate: ✅ added as dev dependency; `src/zip-layer.ts` stub in place for Stage 1.2
 
 ## Roadmap (high level)
 
