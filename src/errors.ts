@@ -14,16 +14,16 @@
  */
 
 export type AloshaXlsxErrorCode =
-  | 'INVALID_ADDRESS'
-  | 'INVALID_RANGE'
-  | 'INVALID_WORKSHEET_NAME'
-  | 'RESERVED_WORKSHEET_NAME'
-  | 'DUPLICATE_WORKSHEET_NAME'
-  | 'WORKSHEET_NAME_TOO_LONG'
-  | 'MERGE_CONFLICT'
-  | 'INVALID_ROW_NUMBER'
-  | 'INVALID_CELL_VALUE'
-  | 'UNSUPPORTED_FEATURE';
+  | "INVALID_ADDRESS"
+  | "INVALID_RANGE"
+  | "INVALID_WORKSHEET_NAME"
+  | "RESERVED_WORKSHEET_NAME"
+  | "DUPLICATE_WORKSHEET_NAME"
+  | "WORKSHEET_NAME_TOO_LONG"
+  | "MERGE_CONFLICT"
+  | "INVALID_ROW_NUMBER"
+  | "INVALID_CELL_VALUE"
+  | "UNSUPPORTED_FEATURE";
 
 /**
  * Base class for all library errors. Abstract — never thrown directly; always a concrete subclass.
@@ -53,7 +53,7 @@ export function isAloshaXlsxError(e: unknown): e is AloshaXlsxError {
 
 /** A cell address or column letter could not be parsed (e.g. `''`, `'A0'`, `'1A'`, `'@'`). */
 export class InvalidAddressError extends AloshaXlsxError {
-  readonly code = 'INVALID_ADDRESS' as const;
+  readonly code = "INVALID_ADDRESS" as const;
   constructor(public readonly address: string) {
     super(`Invalid cell address: ${JSON.stringify(address)}`);
   }
@@ -61,7 +61,7 @@ export class InvalidAddressError extends AloshaXlsxError {
 
 /** A range could not be parsed from the supplied source (e.g. `'A1:'`, malformed tuple). */
 export class InvalidRangeError extends AloshaXlsxError {
-  readonly code = 'INVALID_RANGE' as const;
+  readonly code = "INVALID_RANGE" as const;
   constructor(public readonly range: unknown) {
     super(`Invalid range: ${JSON.stringify(range)}`);
   }
@@ -72,11 +72,11 @@ export class InvalidRangeError extends AloshaXlsxError {
 // ---------------------------------------------------------------------------
 
 /** Why a worksheet name was rejected (illegal-character/empty/edge-quote cases). */
-export type InvalidWorksheetNameReason = 'empty' | 'illegal-characters' | 'edge-quote';
+export type InvalidWorksheetNameReason = "empty" | "illegal-characters" | "edge-quote";
 
 /** Worksheet name is empty, contains `* ? : / \ [ ]`, or starts/ends with a single quote. */
 export class InvalidWorksheetNameError extends AloshaXlsxError {
-  readonly code = 'INVALID_WORKSHEET_NAME' as const;
+  readonly code = "INVALID_WORKSHEET_NAME" as const;
   constructor(
     public readonly worksheetName: string,
     public readonly reason: InvalidWorksheetNameReason,
@@ -86,11 +86,11 @@ export class InvalidWorksheetNameError extends AloshaXlsxError {
 
   private static messageFor(name: string, reason: InvalidWorksheetNameReason): string {
     switch (reason) {
-      case 'empty':
-        return 'Worksheet name cannot be empty.';
-      case 'edge-quote':
+      case "empty":
+        return "Worksheet name cannot be empty.";
+      case "edge-quote":
         return `Worksheet name cannot start or end with a single quote: ${JSON.stringify(name)}`;
-      case 'illegal-characters':
+      case "illegal-characters":
         return `Worksheet name ${JSON.stringify(name)} cannot include any of: * ? : \\ / [ ]`;
     }
   }
@@ -98,7 +98,7 @@ export class InvalidWorksheetNameError extends AloshaXlsxError {
 
 /** Worksheet name uses a reserved word (Excel reserves `"History"`). */
 export class ReservedWorksheetNameError extends AloshaXlsxError {
-  readonly code = 'RESERVED_WORKSHEET_NAME' as const;
+  readonly code = "RESERVED_WORKSHEET_NAME" as const;
   constructor(public readonly worksheetName: string) {
     super(`Worksheet name is reserved and cannot be used: ${JSON.stringify(worksheetName)}`);
   }
@@ -106,7 +106,7 @@ export class ReservedWorksheetNameError extends AloshaXlsxError {
 
 /** A worksheet with this name already exists in the workbook (comparison is case-insensitive). */
 export class DuplicateWorksheetNameError extends AloshaXlsxError {
-  readonly code = 'DUPLICATE_WORKSHEET_NAME' as const;
+  readonly code = "DUPLICATE_WORKSHEET_NAME" as const;
   constructor(public readonly worksheetName: string) {
     super(`Worksheet name already exists: ${JSON.stringify(worksheetName)}`);
   }
@@ -117,7 +117,7 @@ export class DuplicateWorksheetNameError extends AloshaXlsxError {
  * throws so the caller decides — see docs/STAGE-1.2-SPEC.md §7.
  */
 export class WorksheetNameTooLongError extends AloshaXlsxError {
-  readonly code = 'WORKSHEET_NAME_TOO_LONG' as const;
+  readonly code = "WORKSHEET_NAME_TOO_LONG" as const;
   /** Excel's hard cap on sheet-name length. */
   static readonly MAX_LENGTH = 31;
   constructor(
@@ -137,7 +137,7 @@ export class WorksheetNameTooLongError extends AloshaXlsxError {
 
 /** Attempted to merge a region that overlaps an existing merge (merges are atomic — API-AUDIT §2). */
 export class MergeConflictError extends AloshaXlsxError {
-  readonly code = 'MERGE_CONFLICT' as const;
+  readonly code = "MERGE_CONFLICT" as const;
   constructor(public readonly range: string) {
     super(`Cannot merge cells: range ${JSON.stringify(range)} overlaps an existing merge.`);
   }
@@ -145,7 +145,7 @@ export class MergeConflictError extends AloshaXlsxError {
 
 /** A row model's `number` does not match the row it is being assigned to (model round-trip guard). */
 export class InvalidRowNumberError extends AloshaXlsxError {
-  readonly code = 'INVALID_ROW_NUMBER' as const;
+  readonly code = "INVALID_ROW_NUMBER" as const;
   constructor(
     public readonly expected: number,
     public readonly actual: number,
@@ -156,14 +156,16 @@ export class InvalidRowNumberError extends AloshaXlsxError {
 
 /** A value passed to `cell.value` is not a supported {@link import('./model/cell-value').CellValue}. */
 export class InvalidCellValueError extends AloshaXlsxError {
-  readonly code = 'INVALID_CELL_VALUE' as const;
+  readonly code = "INVALID_CELL_VALUE" as const;
   constructor(public readonly value: unknown) {
     super(`Unsupported cell value: ${InvalidCellValueError.describe(value)}`);
   }
 
   private static describe(value: unknown): string {
-    const t = value === null ? 'null' : typeof value;
-    return t === 'object' ? `object ${Object.prototype.toString.call(value)}` : `${t} (${String(value)})`;
+    const t = value === null ? "null" : typeof value;
+    return t === "object"
+      ? `object ${Object.prototype.toString.call(value)}`
+      : `${t} (${String(value)})`;
   }
 }
 
@@ -173,7 +175,7 @@ export class InvalidCellValueError extends AloshaXlsxError {
  * Use to fail loudly on stubs instead of silently no-op'ing.
  */
 export class UnsupportedFeatureError extends AloshaXlsxError {
-  readonly code = 'UNSUPPORTED_FEATURE' as const;
+  readonly code = "UNSUPPORTED_FEATURE" as const;
   constructor(public readonly feature: string) {
     super(`Feature not yet supported in @alosha/xlsx: ${feature}`);
   }
