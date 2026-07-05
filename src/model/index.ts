@@ -32,4 +32,19 @@ export type {
 } from "./style.js";
 export { resolveCellStyle } from "./style.js";
 export type { RowValues } from "./types.js";
+export type {
+  CalculationProperties,
+  WorkbookModel,
+  WorkbookProperties,
+  WorkbookView,
+} from "./workbook.js";
+export { Workbook } from "./workbook.js";
+export type {
+  AddWorksheetOptions,
+  RowInheritOption,
+  WorksheetModel,
+  WorksheetProperties,
+  WorksheetView,
+} from "./worksheet.js";
+export { Worksheet } from "./worksheet.js";
 export type { WorksheetHost } from "./worksheet-host.js";
