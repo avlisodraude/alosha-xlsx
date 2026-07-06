@@ -143,6 +143,12 @@ behave as you'd expect. Common differences to watch for:
 Not everything ExcelJS does is implemented yet — check the feature matrix and limitations before
 porting a workbook that leans on drawings, streaming, or data validation.
 
+**Want a one-line import swap instead?** `@alosha/xlsx/compat` is an ExcelJS-shaped drop-in — same
+`cell.type` numbers, same style-setter precedence, same `addRow`/`row.values`/`worksheet.columns`
+behaviour — for code that shouldn't need to change beyond `import ExcelJS from "@alosha/xlsx/compat"`.
+See [`docs/MIGRATION.md`](./docs/MIGRATION.md) for the supported/deferred matrix and the two
+behavioural notes to check before porting.
+
 ## Known limitations
 
 - **Hyperlink cells round-trip as their display text.** Setting a `{ text, hyperlink }` value
