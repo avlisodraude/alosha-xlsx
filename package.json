@@ -1,6 +1,6 @@
 {
   "name": "@alosha/xlsx",
-  "version": "0.0.0",
+  "version": "0.2.0",
   "description": "A modern TypeScript library for reading and writing XLSX spreadsheets, inspired by exceljs.",
   "keywords": [
     "xlsx",
@@ -62,6 +62,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.3.4",
+    "@changesets/cli": "^2.31.0",
     "@types/node": "^22.10.0",
     "exceljs": "^4.4.0",
     "tsup": "^8.5.0",
