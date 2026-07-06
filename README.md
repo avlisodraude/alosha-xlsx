@@ -146,7 +146,7 @@ porting a workbook that leans on drawings, streaming, or data validation.
 **Want a one-line import swap instead?** `@alosha/xlsx/compat` is an ExcelJS-shaped drop-in — same
 `cell.type` numbers, same style-setter precedence, same `addRow`/`row.values`/`worksheet.columns`
 behaviour — for code that shouldn't need to change beyond `import ExcelJS from "@alosha/xlsx/compat"`.
-See [`docs/MIGRATION.md`](./docs/MIGRATION.md) for the supported/deferred matrix and the two
+See [`docs/MIGRATION.md`](https://github.com/avlisodraude/alosha-xlsx/blob/main/docs/MIGRATION.md) for the supported/deferred matrix and the two
 behavioural notes to check before porting.
 
 ## Known limitations
