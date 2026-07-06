@@ -23,7 +23,8 @@ export type AloshaXlsxErrorCode =
   | "MERGE_CONFLICT"
   | "INVALID_ROW_NUMBER"
   | "INVALID_CELL_VALUE"
-  | "UNSUPPORTED_FEATURE";
+  | "UNSUPPORTED_FEATURE"
+  | "INVALID_PACKAGE";
 
 /**
  * Base class for all library errors. Abstract — never thrown directly; always a concrete subclass.
@@ -178,5 +179,21 @@ export class UnsupportedFeatureError extends AloshaXlsxError {
   readonly code = "UNSUPPORTED_FEATURE" as const;
   constructor(public readonly feature: string) {
     super(`Feature not yet supported in @alosha/xlsx: ${feature}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Package structure  (src/xlsx/read/package.ts, STAGE-2-SPEC.md §3)
+// ---------------------------------------------------------------------------
+
+/**
+ * The `.xlsx` package's OPC structure (zip / rels / parts) is missing or malformed: a truncated/corrupt
+ * zip, a missing `_rels/.rels` or workbook part, or a relationship that cannot be resolved. Thrown by
+ * `openPackage` before any SpreadsheetML parsing begins.
+ */
+export class InvalidPackageError extends AloshaXlsxError {
+  readonly code = "INVALID_PACKAGE" as const;
+  constructor(public readonly reason: string) {
+    super(`Invalid .xlsx package: ${reason}`);
   }
 }
