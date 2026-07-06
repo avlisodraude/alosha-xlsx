@@ -22,13 +22,20 @@
   "type": "module",
   "sideEffects": [
     "./dist/index.js",
-    "./dist/index.cjs"
+    "./dist/index.cjs",
+    "./dist/compat.js",
+    "./dist/compat.cjs"
   ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
+    },
+    "./compat": {
+      "types": "./dist/compat.d.ts",
+      "import": "./dist/compat.js",
+      "require": "./dist/compat.cjs"
     },
     "./package.json": "./package.json"
   },
