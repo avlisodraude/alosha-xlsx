@@ -13,6 +13,12 @@
   ],
   "license": "MIT",
   "author": "E.Y. Silva Navarrete",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/avlisodraude/alosha-xlsx.git"
+  },
+  "homepage": "https://github.com/avlisodraude/alosha-xlsx#readme",
+  "bugs": "https://github.com/avlisodraude/alosha-xlsx/issues",
   "type": "module",
   "sideEffects": [
     "./dist/index.js",
