@@ -177,8 +177,16 @@ export class InvalidCellValueError extends AloshaXlsxError {
  */
 export class UnsupportedFeatureError extends AloshaXlsxError {
   readonly code = "UNSUPPORTED_FEATURE" as const;
-  constructor(public readonly feature: string) {
-    super(`Feature not yet supported in @alosha/xlsx: ${feature}`);
+  constructor(
+    public readonly feature: string,
+    /** Optional pointer appended to the message (e.g. the compat shim's tracking-issue note). */
+    public readonly detail?: string,
+  ) {
+    super(
+      detail === undefined
+        ? `Feature not yet supported in @alosha/xlsx: ${feature}`
+        : `${feature}: ${detail}`,
+    );
   }
 }
 
