@@ -48,6 +48,20 @@ pnpm format       # auto-format with Biome
 pnpm typecheck    # type-check with tsc
 ```
 
+### A note on `pnpm install` warnings
+
+Installing dev dependencies prints a handful of `npm warn deprecated` lines
+(`rimraf`, `inflight`, `lodash.isequal`, `glob`, `uuid`, `fstream`). These are
+**transitive dependencies of `exceljs`**, which we pull in only as a
+`devDependency` to verify our output: the round-trip test in
+`tests/xlsx/write-workbook.test.ts` re-opens a generated workbook with ExcelJS
+to confirm it loads without a repair prompt.
+
+None of these ship in `@alosha/xlsx` — the published package has a single
+runtime dependency, `fflate`. The warnings are ExcelJS's baggage, not ours;
+in fact they're a tidy illustration of why this library exists. If ExcelJS is
+not installed, that one round-trip test simply skips.
+
 ## License
 
 [MIT](./LICENSE) © E.Y. Silva Navarrete
