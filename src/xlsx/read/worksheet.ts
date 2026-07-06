@@ -1,0 +1,291 @@
+// Inverse of the Stage 1.3 worksheet writer (see docs/STAGE-2-SPEC.md §6, and src/xlsx/parts/worksheet.ts
+// for the forward direction). Walks sheetN.xml with the pull parser and populates an already-created
+// Worksheet: `<cols>` -> Column defaults, `<sheetData>` rows/cells -> values + styles, `<mergeCells>` ->
+// merge regions (applied last so masters keep their values).
+//
+// The `t` attribute drives value decoding, exactly reversing the writer's mapping:
+//   s -> shared-string index   inlineStr -> <is> text/runs   str -> formula string result
+//   b -> boolean               e -> error code               n/absent -> number, or Date when the
+//                                                             cell's number format is a date/time one.
+// A `<f>` present makes it a formula cell whose cached `<v>` becomes the typed `result`.
+
+import { decodeAddress } from "../../address/index.js";
+import { InvalidCellValueError } from "../../errors.js";
+import type {
+  CellError,
+  CellValue,
+  ErrorCode,
+  RichText,
+  Row,
+  Worksheet,
+} from "../../model/index.js";
+import { cursor, localName, type XmlCursor, type XmlEvent } from "../../xml/index.js";
+import { serialToDate } from "../date.js";
+import { parseRichString } from "./shared-strings.js";
+import type { StyleTable } from "./styles.js";
+
+export interface WorksheetReadContext {
+  sharedStrings: (string | RichText)[];
+  styles: StyleTable;
+  date1904: boolean;
+}
+
+type OpenEvent = Extract<XmlEvent, { kind: "open" }>;
+
+/** Populate an already-created {@link Worksheet} from its sheetN.xml. */
+export function parseWorksheet(ws: Worksheet, xml: string, ctx: WorksheetReadContext): void {
+  const c = cursor(xml);
+  let ev = c.next();
+  while (ev && !(ev.kind === "open" && localName(ev.name) === "worksheet")) ev = c.next();
+  if (ev?.kind !== "open" || ev.selfClosing) return;
+
+  // Merges are collected and applied after every cell is placed, regardless of document order, so a
+  // master cell's value is never clobbered by linking its slaves.
+  const merges: string[] = [];
+
+  c.eachChild(ev.name, (child) => {
+    switch (localName(child.name)) {
+      case "cols":
+        if (!child.selfClosing) parseCols(c, child.name, ws, ctx);
+        break;
+      case "sheetData":
+        if (!child.selfClosing) parseSheetData(c, child.name, ws, ctx);
+        break;
+      case "mergeCells":
+        if (!child.selfClosing) collectMerges(c, child.name, merges);
+        break;
+      default:
+        if (!child.selfClosing) c.textUntilClose(child.name);
+    }
+  });
+
+  for (const ref of merges) ws.mergeCells(ref);
+}
+
+function parseCols(
+  c: XmlCursor,
+  container: string,
+  ws: Worksheet,
+  ctx: WorksheetReadContext,
+): void {
+  c.eachChild(container, (col) => {
+    if (localName(col.name) !== "col") {
+      if (!col.selfClosing) c.textUntilClose(col.name);
+      return;
+    }
+    const min = num(col.attrs.min);
+    const max = num(col.attrs.max);
+    if (min === undefined || max === undefined) return;
+
+    const width = num(col.attrs.width);
+    const hidden = truthy(col.attrs.hidden);
+    const outline = num(col.attrs.outlineLevel);
+    const styleIdx = num(col.attrs.style);
+    const style = styleIdx ? ctx.styles.styleFor(styleIdx) : undefined;
+
+    for (let n = min; n <= max; n++) {
+      const column = ws.getColumn(n);
+      if (width !== undefined) column.width = width;
+      if (hidden) column.hidden = true;
+      if (outline) column.outlineLevel = outline;
+      if (style) column.style = style;
+    }
+  });
+}
+
+function parseSheetData(
+  c: XmlCursor,
+  container: string,
+  ws: Worksheet,
+  ctx: WorksheetReadContext,
+): void {
+  let expectedRow = 0;
+  c.eachChild(container, (rowEl) => {
+    if (localName(rowEl.name) !== "row") {
+      if (!rowEl.selfClosing) c.textUntilClose(rowEl.name);
+      return;
+    }
+    expectedRow = num(rowEl.attrs.r) ?? expectedRow + 1;
+    parseRow(c, rowEl, expectedRow, ws, ctx);
+  });
+}
+
+function parseRow(
+  c: XmlCursor,
+  rowEl: OpenEvent,
+  rowNumber: number,
+  ws: Worksheet,
+  ctx: WorksheetReadContext,
+): void {
+  const row = ws.getRow(rowNumber);
+
+  const height = num(rowEl.attrs.ht);
+  if (height !== undefined) row.height = height;
+  if (truthy(rowEl.attrs.hidden)) row.hidden = true;
+  const outline = num(rowEl.attrs.outlineLevel);
+  if (outline) row.outlineLevel = outline;
+  // Set the row style before creating any cell so the (empty) fan-out to existing cells is a no-op;
+  // cells created below then resolve this row style plus their column style at construction.
+  const rowStyleIdx = num(rowEl.attrs.s);
+  if (rowStyleIdx) row.style = ctx.styles.styleFor(rowStyleIdx);
+
+  if (rowEl.selfClosing) return;
+
+  let expectedCol = 0;
+  c.eachChild(rowEl.name, (cellEl) => {
+    if (localName(cellEl.name) !== "c") {
+      if (!cellEl.selfClosing) c.textUntilClose(cellEl.name);
+      return;
+    }
+    expectedCol = parseCell(c, cellEl, expectedCol + 1, row, ctx);
+  });
+}
+
+/** Parse one `<c>`; returns the column index it occupied (so a following `<c>` without an `r` can be
+ *  placed in the next column). */
+function parseCell(
+  c: XmlCursor,
+  cellEl: OpenEvent,
+  fallbackCol: number,
+  row: Row,
+  ctx: WorksheetReadContext,
+): number {
+  const col = cellEl.attrs.r !== undefined ? decodeAddress(cellEl.attrs.r).col : fallbackCol;
+  const styleIdx = num(cellEl.attrs.s) ?? 0;
+  const t = cellEl.attrs.t;
+
+  let vText: string | undefined;
+  let inlineValue: string | RichText | undefined;
+  let formulaExpr: string | undefined;
+  let hasFormula = false;
+
+  if (!cellEl.selfClosing) {
+    c.eachChild(cellEl.name, (child) => {
+      switch (localName(child.name)) {
+        case "v":
+          vText = child.selfClosing ? "" : c.textUntilClose(child.name);
+          break;
+        case "f":
+          hasFormula = true;
+          formulaExpr = child.selfClosing ? "" : c.textUntilClose(child.name);
+          break;
+        case "is":
+          inlineValue = child.selfClosing ? "" : parseRichString(c, child.name);
+          break;
+        default:
+          if (!child.selfClosing) c.textUntilClose(child.name);
+      }
+    });
+  }
+
+  const value = hasFormula
+    ? buildFormula(formulaExpr ?? "", t, vText, styleIdx, ctx)
+    : decodeValue(t, vText, inlineValue, styleIdx, ctx);
+
+  // An empty, unstyled, non-formula cell contributes nothing to the model — skip it.
+  if (value === null && styleIdx === 0 && !hasFormula) return col;
+
+  const cell = row.getCell(col);
+  if (value !== null) cell.value = value;
+  if (styleIdx !== 0) cell.style = ctx.styles.styleFor(styleIdx);
+  return col;
+}
+
+/** Decode a non-formula cell's value from its `t` and body. Returns `null` for a valueless cell. */
+function decodeValue(
+  t: string | undefined,
+  vText: string | undefined,
+  inlineValue: string | RichText | undefined,
+  styleIdx: number,
+  ctx: WorksheetReadContext,
+): CellValue {
+  switch (t) {
+    case "s": {
+      if (vText === undefined) return null;
+      return ctx.sharedStrings[Number(vText)] ?? "";
+    }
+    case "inlineStr":
+      return inlineValue ?? "";
+    case "str":
+      return vText ?? "";
+    case "b":
+      return vText === undefined ? null : decodeBool(vText);
+    case "e":
+      return vText === undefined ? null : { error: vText as ErrorCode };
+    default: {
+      // "n" or the attribute absent: a number, promoted to a Date when the style is a date format.
+      if (vText === undefined) return null;
+      const n = Number(vText);
+      return ctx.styles.isDateStyle(styleIdx) ? serialToDate(n, ctx.date1904) : n;
+    }
+  }
+}
+
+/** Build a formula cell: the bare `<f>` expression (matching the writer, which stripped the leading
+ *  `=`) plus its cached `<v>` decoded into the typed `result`. */
+function buildFormula(
+  expr: string,
+  t: string | undefined,
+  vText: string | undefined,
+  styleIdx: number,
+  ctx: WorksheetReadContext,
+): CellValue {
+  const result = vText === undefined ? undefined : decodeScalar(t, vText, styleIdx, ctx);
+  return result === undefined ? { formula: expr } : { formula: expr, result };
+}
+
+/** Decode a cached formula `<v>` into the scalar `result` union (no RichText — a rich shared-string
+ *  result, which the writer never emits, flattens to its text). */
+function decodeScalar(
+  t: string | undefined,
+  vText: string,
+  styleIdx: number,
+  ctx: WorksheetReadContext,
+): number | string | boolean | Date | CellError {
+  switch (t) {
+    case "b":
+      return decodeBool(vText);
+    case "e":
+      return { error: vText as ErrorCode };
+    case "str":
+      return vText;
+    case "s": {
+      const entry = ctx.sharedStrings[Number(vText)];
+      if (entry === undefined) return "";
+      return typeof entry === "string" ? entry : entry.richText.map((run) => run.text).join("");
+    }
+    default: {
+      const n = Number(vText);
+      return ctx.styles.isDateStyle(styleIdx) ? serialToDate(n, ctx.date1904) : n;
+    }
+  }
+}
+
+function collectMerges(c: XmlCursor, container: string, merges: string[]): void {
+  c.eachChild(container, (mergeCell) => {
+    if (localName(mergeCell.name) === "mergeCell" && mergeCell.attrs.ref !== undefined) {
+      merges.push(mergeCell.attrs.ref);
+    } else if (!mergeCell.selfClosing) {
+      c.textUntilClose(mergeCell.name);
+    }
+  });
+}
+
+/** A boolean cell's `<v>` is `1`/`0`; anything else is a malformed package, surfaced as a typed error. */
+function decodeBool(raw: string): boolean {
+  if (raw === "1" || raw === "true" || raw === "TRUE") return true;
+  if (raw === "0" || raw === "false" || raw === "FALSE") return false;
+  throw new InvalidCellValueError(raw);
+}
+
+/** Parse a numeric attribute; `undefined` when absent or not a finite number. */
+function num(val: string | undefined): number | undefined {
+  if (val === undefined) return undefined;
+  const n = Number(val);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/** A boolean-ish OOXML attribute (`hidden`): absent means false; `"1"`/`"true"` mean true. */
+function truthy(val: string | undefined): boolean {
+  return val === "1" || val === "true";
+}

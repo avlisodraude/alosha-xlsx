@@ -16,17 +16,21 @@ export function parseSharedStrings(xml: string): (string | RichText)[] {
   const entries: (string | RichText)[] = [];
   c.eachChild(ev.name, (child) => {
     if (localName(child.name) !== "si") return;
-    entries.push(child.selfClosing ? "" : parseSi(c, child.name));
+    entries.push(child.selfClosing ? "" : parseRichString(c, child.name));
   });
   return entries;
 }
 
-/** Parses one `<si>`'s children: a lone `<t>` is a plain string, `<r>` runs make a `RichText`. */
-function parseSi(c: XmlCursor, siName: string): string | RichText {
+/**
+ * Parses a CT_Rst container's children (`<si>` in sharedStrings, or `<is>` inline on a worksheet cell —
+ * the grammar is identical): a lone `<t>` is a plain string, `<r>` runs make a `RichText`. `container`
+ * is the open element's name (prefix included); its `open` must already be consumed.
+ */
+export function parseRichString(c: XmlCursor, container: string): string | RichText {
   let text: string | undefined;
   const runs: RichTextRun[] = [];
 
-  c.eachChild(siName, (child) => {
+  c.eachChild(container, (child) => {
     const name = localName(child.name);
     if (name === "t") {
       text = child.selfClosing ? "" : c.textUntilClose(child.name);
