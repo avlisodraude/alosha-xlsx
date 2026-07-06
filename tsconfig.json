@@ -20,7 +20,10 @@
     "sourceMap": true,
     "resolveJsonModule": true,
     "outDir": "./dist",
-    "rootDir": "."
+    "rootDir": ".",
+    "paths": {
+      "@alosha/xlsx/compat": ["./src/compat/index.ts"]
+    }
   },
   "include": ["src", "tests", "bench", "tsup.config.ts"],
   "exclude": ["node_modules", "dist"]
