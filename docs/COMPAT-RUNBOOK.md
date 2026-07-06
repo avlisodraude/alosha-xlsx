@@ -83,9 +83,28 @@ Confirm D1 before session 3.
 
 ### Session 5 — release 0.3.0 (Opus 4.8, Claude Code; publish owner-only)
 
-> After sessions 1–4 are merged and CI is green, cut 0.3.0 mirroring `docs/RELEASE-0.2-RUNBOOK.md`
-> session 4: add a `minor` changeset describing the `@alosha/xlsx/compat` ExcelJS shim, `pnpm changeset
-> version` (0.2.0 → 0.3.0), `pnpm build`, `npm pack` and confirm the tarball now also ships
-> `dist/compat.js`/`.cjs`/`.d.ts`, `npm publish --dry-run`. STOP before the real publish and hand me
-> (Eduardo) the `npm publish --otp=…` / `git tag v0.3.0 && git push --tags` / `gh release create` commands.
-> Commit the version bump + changelog on `main`, push.
+> **DECISION LOCKED: ship 0.3.0 with the two documented gaps as-is — do NOT change the facade.** The
+> unstyled-`fill` gap (cosmetic) and the `eachRow`/`eachCell` null-filtering gap (narrow, workaround
+> documented) are both in `docs/MIGRATION.md`; the `eachRow`/`eachCell` faithfulness fix is deferred to the
+> **0.3.1 backlog** (a ~15-line facade override skipping `Null`-type cells when `includeEmpty` is falsy).
+> This session is release mechanics only — no `src/` behavior changes.
+>
+> After sessions 1–4 are merged to `main` and CI is green, cut 0.3.0 mirroring `docs/RELEASE-0.2-RUNBOOK.md`
+> session 4:
+> 1. `pnpm changeset` → add a **`minor`** changeset describing the new `@alosha/xlsx/compat` ExcelJS-drop-in
+>    subpath (read+write parity, D1 `cell.type` numeric emulation, D2 whole-object style precedence, the
+>    documented gaps). `pnpm changeset version` → **confirm it lands on 0.3.0** (a `minor` on 0.2.0 resolves
+>    to 0.3.0 correctly — no hand-editing needed this time, unlike the 0.2.0 release).
+> 2. `pnpm build`, then `npm pack` and inspect the tarball: it MUST now ship **both** entries —
+>    `dist/index.{js,cjs,d.ts,d.cts}` AND `dist/compat.{js,cjs,d.ts,d.cts}` — plus `README.md`, `LICENSE`,
+>    `package.json`, and nothing stray.
+> 3. Ensure the README's "Migrating from ExcelJS" link to `docs/MIGRATION.md` resolves for npm readers:
+>    `docs/MIGRATION.md` is NOT in the `files` allowlist, so a relative link 404s on npmjs.com — either add
+>    `docs/MIGRATION.md` to `package.json` `files`, or make the README link an absolute GitHub URL.
+> 4. `npm publish --dry-run` (public access) and fix anything it flags.
+> 5. STOP before the real publish. Commit the version bump + changelog + changeset consumption on `main` and
+>    push, then hand me (Eduardo) the exact commands: `npm publish --otp=<OTP>`,
+>    `git tag v0.3.0 && git push origin v0.3.0`, and `gh release create v0.3.0` with notes from the changelog.
+>
+> Note for me after publish: the first `npm view @alosha/xlsx` may 404 briefly (read-replica lag, same as
+> 0.2.0) — that's propagation, not failure; the version doc / exact-tarball install work immediately.
