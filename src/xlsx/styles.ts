@@ -40,7 +40,7 @@ const DEFAULT_CELL_STYLE_XF = '<xf numFmtId="0" fontId="0" fillId="0" borderId="
  * reserved id and emits no `<numFmt>` entry; anything else becomes a custom code at id ≥ 164. Strings must
  * match exactly to dedup, so these mirror the canonical ECMA-376 built-in codes.
  */
-const BUILTIN_NUMFMT_BY_CODE = new Map<string, number>([
+export const BUILTIN_NUMFMT_BY_CODE = new Map<string, number>([
   ["General", 0],
   ["0", 1],
   ["0.00", 2],
