@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.8.0
+
+### Minor Changes
+
+- Cell comments (`cell.note`, write + read + compat), the first real consumer of the F0 multi-part
+  worksheet seam.
+
+  A comment on a cell — `worksheet.getCell("B2").note = "text"` or the object form `{ texts: RichText |
+string, author? }` — is written as an `xl/comments{n}.xml` note/author table plus a legacy
+  `xl/drawings/vmlDrawing{n}.vml` anchor part, wired through a `<legacyDrawing r:id>` (CT_Worksheet's last
+  child, after `<drawing>`).
+
+  - **Model.** A worksheet-level `Comments` manager keyed by cell ref (single-cell, unlike range-keyed data
+    validations); `cell.note` get/set routes through it, mirroring `cell.dataValidation`. Default author
+    "Author" when unset (ExcelJS parity).
+  - **Write.** `<authors>` (distinct authors, stable first-seen order) + `<commentList>` with a rich
+    `<text>`, reusing the shared-string run renderer. A plain-string comment still renders as a single
+    `<r><t>` run rather than a lone `<t>`, since exceljs's own comment parser only reads `<r>` children —
+    writing a lone `<t>` would make the text invisible to exceljs (and to any file it re-opens). The VML
+    part carries one `<v:shape>` per comment with a 0-based row/column anchor; geometry is a fixed default.
+  - **Read.** Follows `<legacyDrawing>`/rels to `comments{n}.xml`, resolving `authorId` back to an author
+    string; a lone `<t>` or `<r>` runs both invert correctly (real Excel and other tools may still emit the
+    lone-`<t>` form). Malformed/unresolvable parts leave a cell without a note rather than throwing.
+  - **Compat.** `cell.note` is un-deferred: a bare string passes straight through, and ExcelJS's flat
+    `texts: [{font, text}]` run array is bridged to/from the core's `RichText` wrapper. `author` is a
+    compat/native-API extension — real ExcelJS itself never round-trips one (its own writer hardcodes a
+    single author, and its reader never resolves one back onto `note.author`) — see MIGRATION.md's new D4
+    note, which also covers the plain-string round-trip caveat and exceljs's valued-cell requirement for
+    a note to survive being reopened.
+
+  **Deferred:** threaded/modern comments (`xl/threadedComments/` + persons), comment box
+  geometry/margins/`editAs`/visibility.
+
 ## 0.7.0
 
 ### Minor Changes
