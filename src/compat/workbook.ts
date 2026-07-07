@@ -4,26 +4,30 @@
 // semantics into the core `@alosha/xlsx` entry): a **Proxy tree**. `CompatWorkbook`'s constructor
 // returns a Proxy over a plain core `Workbook`; every model object reachable from it (worksheets,
 // rows, columns, cells) is wrapped on the way out. The proxies delegate everything by default and
-// override only the three documented divergences plus the deferred surface:
+// override only the four documented divergences plus the deferred surface:
 //
 //   1. `cell.type` / `cell.effectiveType` report ExcelJS `ValueType` numbers (§3, Decision D1 = full
 //      emulation) instead of our `CellType` numbers.
 //   2. cell style setters (`font`/`fill`/`border`/`alignment`/`protection`/`numFmt`) route through
 //      `applyExcelJsStyle` — ExcelJS whole-object-per-category precedence (§4).
-//   3. the deferred surface (§6: stream/csv/images/tables/conditional-formatting/comments/
+//   3. `worksheet.autoFilter =` accepts ExcelJS's `{from,to}` object form (each an address string or
+//      `{row,column}`) and normalizes it to our `"A1:D1"` range string (PANES-AUTOFILTER-SPEC §4).
+//   4. the deferred surface (§6: stream/csv/images/tables/conditional-formatting/comments/
 //      defined-names/protection) throws `UnsupportedFeatureError` at the exact call, naming the
 //      feature, rather than silently no-op'ing.
 //
 // Everything else — `addRow(array | object)`, `row.values` (1-based, empty `[0]`), `worksheet.columns
 // = [{header, key, width}]`, the `workbook.xlsx.*` I/O accessor, `cell.dataValidation` and
-// `worksheet.dataValidations` (DATA-VALIDATION-SPEC §5 — the core shape already matches ExcelJS's) —
-// is already ExcelJS-shaped in the core model (COMPAT-SPEC.md §2 "already compatible"), so the
-// proxies pass it straight through. The core classes are never mutated; the divergence lives
+// `worksheet.dataValidations` (DATA-VALIDATION-SPEC §5 — the core shape already matches ExcelJS's),
+// and `worksheet.views` (PANES-AUTOFILTER-SPEC §4 — ExcelJS's frozen-view fields are already our field
+// names) — is already ExcelJS-shaped in the core model (COMPAT-SPEC.md §2 "already compatible"), so
+// the proxies pass it straight through. The core classes are never mutated; the divergence lives
 // entirely in these compat-only wrappers.
 //
 // Deferred still (DATA-VALIDATION-SPEC §8): a cross-sheet list ref (the x14/`<extLst>` form) is not
 // supported — only same-sheet ranges and inline lists round-trip.
 
+import { encodeAddress } from "../address/index.js";
 import { UnsupportedFeatureError } from "../errors.js";
 import type { XlsxAccessor } from "../index.js";
 import { Cell, Column, Row, Workbook, Worksheet } from "../index.js";
@@ -177,6 +181,23 @@ function eachWithEmptyFilter<T>(
   });
 }
 
+/** ExcelJS accepts an `{from,to}` address (each an `"A1"` string or `{row,column}`) for `autoFilter`
+ *  alongside a plain `"A1:D1"` string (docs/PANES-AUTOFILTER-SPEC.md §4); the core model only ever
+ *  stores the string range, and the writer emits `ref` verbatim, so the object form must be
+ *  normalized here before it reaches the core. */
+function normalizeAutoFilter(value: unknown): unknown {
+  if (value !== null && typeof value === "object" && "from" in value && "to" in value) {
+    const { from, to } = value as {
+      from: string | { row: number; column: number };
+      to: string | { row: number; column: number };
+    };
+    const address = (a: string | { row: number; column: number }): string =>
+      typeof a === "string" ? a : encodeAddress(a.row, a.column);
+    return `${address(from)}:${address(to)}`;
+  }
+  return value;
+}
+
 // --- the per-level proxies ----------------------------------------------------------------------
 
 function proxyCell(cell: Cell): Cell {
@@ -291,6 +312,11 @@ function proxyWorksheet(worksheet: Worksheet): Worksheet {
       return reflectGet(target, prop);
     },
     set(target, prop, value) {
+      // §4: ExcelJS accepts an `{from,to}` object for `autoFilter`; the core only stores the range
+      // string, and `renderAutoFilter` writes `ref` verbatim, so normalize it here.
+      if (prop === "autoFilter") {
+        return Reflect.set(target, prop, normalizeAutoFilter(value), target);
+      }
       return Reflect.set(target, prop, value, target);
     },
   });

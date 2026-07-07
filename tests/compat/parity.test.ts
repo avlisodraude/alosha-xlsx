@@ -315,3 +315,72 @@ describe("compat parity — @alosha/xlsx/compat vs real exceljs", () => {
     });
   }
 });
+
+// --- panes + auto-filter (PANES-AUTOFILTER-SPEC.md §4) -------------------------------------------
+//
+// `views`/`autoFilter` are sheet-level, not per-cell, so they sit outside the cell-sampling corpus
+// above; same two-engine build-then-diff shape, sampling the sheet view/filter instead of cells.
+
+interface ViewSample {
+  state: string | undefined;
+  xSplit: number | undefined;
+  ySplit: number | undefined;
+  autoFilter: string | null;
+}
+
+function sampleView(wb: AnyWorkbook): ViewSample {
+  const ws = wb.getWorksheet("Sheet1");
+  const view = (ws.views[0] ?? {}) as { state?: string; xSplit?: number; ySplit?: number };
+  return {
+    state: view.state,
+    xSplit: view.xSplit,
+    ySplit: view.ySplit,
+    autoFilter: ws.autoFilter ?? null,
+  };
+}
+
+describe("compat parity — frozen pane + auto-filter", () => {
+  it("views[0].state/xSplit/ySplit and the autoFilter range match real exceljs", async (ctx) => {
+    const RealExcelJS = await loadRealExceljs();
+    if (!RealExcelJS) {
+      ctx.skip();
+      return;
+    }
+    const CompatExcelJS = await loadCompatExceljs();
+
+    const build: Build = (wb) => {
+      const ws = wb.addWorksheet("Sheet1");
+      ws.getCell("A1").value = "header";
+      ws.views = [{ state: "frozen", xSplit: 1, ySplit: 1, topLeftCell: "B2" }];
+      ws.autoFilter = "A1:D1";
+    };
+
+    const real = new RealExcelJS.Workbook();
+    build(real);
+    const bufReal = (await real.xlsx.writeBuffer()) as Uint8Array;
+
+    const compat = new CompatExcelJS.Workbook();
+    build(compat);
+    const bufCompat = (await compat.xlsx.writeBuffer()) as Uint8Array;
+
+    const loadedReal = new RealExcelJS.Workbook();
+    await loadedReal.xlsx.load(Buffer.from(bufReal));
+    const loadedCompat = new RealExcelJS.Workbook();
+    await loadedCompat.xlsx.load(Buffer.from(bufCompat));
+
+    expect(sampleView(loadedCompat)).toEqual(sampleView(loadedReal));
+  });
+
+  it("normalizes the {from,to} object form of autoFilter to an A1 range string", async () => {
+    const CompatExcelJS = await loadCompatExceljs();
+    const wb = new CompatExcelJS.Workbook();
+
+    const bySheetAddress = wb.addWorksheet("BySheetAddress");
+    bySheetAddress.autoFilter = { from: "A1", to: "D1" };
+    expect(bySheetAddress.autoFilter).toBe("A1:D1");
+
+    const byRowColumn = wb.addWorksheet("ByRowColumn");
+    byRowColumn.autoFilter = { from: { row: 1, column: 1 }, to: { row: 3, column: 4 } };
+    expect(byRowColumn.autoFilter).toBe("A1:D3");
+  });
+});
