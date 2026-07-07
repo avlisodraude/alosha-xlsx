@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.9.0
+
+### Minor Changes
+
+- Embedded images (`workbook.addImage` + `worksheet.addImage`, write + read + compat), the second real
+  consumer of the F0 multi-part worksheet seam.
+
+  Registering an image once at the workbook — `workbook.addImage({ buffer, extension: "png"|"jpeg"|"gif" })`
+  — returns a numeric `imageId`; placing it on a sheet — `worksheet.addImage(id, "B2:D6")` (two-cell anchor)
+  or `worksheet.addImage(id, { tl: { col, row }, ext: { width, height } })` (one-cell anchor, pixel extents)
+  — is written as an `xl/drawings/drawing{n}.xml` DrawingML anchor part, the raw bytes in
+  `xl/media/image{k}.{ext}`, the drawing's own `.rels`, and a `<drawing r:id>` in the worksheet (CT_Worksheet
+  order: after `<hyperlinks>`, before any `<legacyDrawing>`).
+
+  - **Model.** A workbook-level `Image` registry (dedup-free, insertion-order `imageId`s) plus a per-worksheet
+    `WorksheetImage[]` of `{ imageId, range }`; the `"B2:D6"` string anchor decodes through the existing
+    `Range` parser into 0-based `tl`/`br`.
+  - **Write.** EMU conversion (1 pixel = 9525 EMU) for one-cell/`ext` anchors; two-cell anchors keep corner
+    offsets at 0 unless `nativeColOff`/`nativeRowOff` are given. Media bytes push through the F0 `ExtraPart`
+    seam with the right content type; a workbook with no images is byte-identical to a pre-images write.
+  - **Read.** Follows the worksheet's `<drawing>` rel to `drawing{n}.xml`, each anchor's `<a:blip r:embed>`
+    through the drawing's `.rels` to the media path, and reconstructs the registry + anchors (EMU back to
+    pixels). Missing/unresolvable drawing or media parts leave a sheet without that image rather than
+    throwing.
+  - **Compat.** `workbook.addImage`/`getImage`/`media` and `worksheet.addImage`/`getImages` are un-deferred:
+    ExcelJS's `{ buffer }` image input and its three anchor forms (`"B2:D6"` / `{ tl, br }` / `{ tl, ext }`)
+    already match the core shapes, so they pass straight through. `{ base64 }`/`{ filename }` image inputs
+    throw `UnsupportedFeatureError` instead of silently mishandling the image — see MIGRATION.md's new D5
+    note, which also covers real ExcelJS's `Anchor`-class `getImages()` shape. `worksheet.addBackgroundImage`
+    stays a permanent, documented stub.
+
+  **Deferred:** image cropping/rotation/effects, hyperlinked images, header/footer (background) images, SVG,
+  and EMF/WMF.
+
 ## 0.8.0
 
 ### Minor Changes
