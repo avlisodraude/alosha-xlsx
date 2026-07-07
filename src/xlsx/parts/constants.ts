@@ -34,13 +34,13 @@ export const CONTENT_TYPE = {
 } as const;
 
 /** Image content-type by lowercase file extension, for the media `<Default>`s (Track D). */
-export const IMAGE_CONTENT_TYPE: Record<string, string> = {
+export const IMAGE_CONTENT_TYPE = {
   png: "image/png",
   jpeg: "image/jpeg",
   jpg: "image/jpeg",
   gif: "image/gif",
   bmp: "image/bmp",
-};
+} as const satisfies Record<string, string>;
 
 /** Relationship-type URIs (the `Type=` attribute on each `<Relationship>`). */
 export const REL_TYPE = {
