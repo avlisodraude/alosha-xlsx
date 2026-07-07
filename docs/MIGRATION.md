@@ -66,6 +66,21 @@ shapes are **not** bridged, by design (out of scope for the 0.7.0 pass):
   silently removes nothing, since no `ref` will ever equal a number or a function. Call it with the
   block's `ref` string instead.
 
+**D4 — `cell.note` (comments): author isn't part of ExcelJS's real contract, and a note needs a valued
+cell.** Real ExcelJS's own comments writer hardcodes a single author name ("Author") for every comment
+and never resolves one back onto `note.author` when reading a file — `author` simply isn't part of
+ExcelJS's actual round trip, even though its object form doesn't forbid the key. `@alosha/xlsx/compat`
+accepts and returns an optional `author` on `cell.note` regardless (useful when interoperating with the
+plain `@alosha/xlsx` API, whose `Comments` manager is genuinely per-author), but a file that has passed
+through real ExcelJS will only ever show `"Author"`. Separately, a plain-string note (`cell.note =
+"text"`) always serializes as a single `<r><t>` run rather than a lone `<t>`, because ExcelJS's own
+comment parser only reads `<r>` children and would otherwise see no text at all; reading that file back
+through `@alosha/xlsx`'s own reader recovers it as a one-run rich text (`{ richText: [{ text: "text"
+}] }`) rather than the original bare string — expect either shape rather than relying on the string
+staying a string across a full write→read cycle. Finally, ExcelJS only recognises a comment on a cell
+that also carries a value in the sheet XML, so give a noted cell a value if you want the note to survive
+being opened elsewhere.
+
 ## Supported / deferred matrix
 
 | Feature | Status | Notes |
@@ -85,7 +100,7 @@ shapes are **not** bridged, by design (out of scope for the 0.7.0 pass):
 | `addImage`/`getImage`/`workbook.media`/`worksheet.addImage` | ❌ deferred | throws `UnsupportedFeatureError` |
 | `worksheet.addTable`/`getTable(s)` (tables, pivot tables) | ❌ deferred | throws `UnsupportedFeatureError` |
 | `worksheet.addConditionalFormatting`/`removeConditionalFormatting`, `worksheet.conditionalFormattings` | ✅ | `cellIs`, `expression`, the text-contains family, `top10`, `aboveAverage`/`belowAverage`, `duplicateValues`/`uniqueValues`, `colorScale`, `dataBar`, `iconSet`. `colorScale`/`dataBar` colours are bridged bidirectionally between ExcelJS's `{argb}` objects and the core's bare-ARGB-string `CfColor` — see D3 below. Deferred: x14 dataBar gradient/axis/negative-fill extensions, `timePeriod` rules, custom `iconSet` icons. |
-| `cell.note` (comments) | ❌ deferred | throws `UnsupportedFeatureError` |
+| `cell.note` (comments) | ✅ | plain-string and rich-text notes, multi-author sheets. `author` is a compat/native-API extension ExcelJS itself doesn't round-trip — see D4 above. Deferred: threaded/modern comments (`xl/threadedComments/`), comment box geometry/margins/`editAs`/visibility. |
 | `workbook.definedNames.*` | ❌ deferred | throws `UnsupportedFeatureError` |
 | `worksheet.protect`/`unprotect` | ❌ deferred | throws `UnsupportedFeatureError` |
 

@@ -433,6 +433,84 @@ function sampleConditionalFormattings(wb: AnyWorkbook, sheetName: string): CfSam
   return samples;
 }
 
+// --- cell comments (COMMENTS-SPEC.md §3) ----------------------------------------------------------
+//
+// Notes sit outside the cell-sampling corpus (like views/CF) because real exceljs's own reader
+// normalizes them in ways the generic Sample shape doesn't capture: its comments-xform hardcodes a
+// single "Author" on write and never resolves one back onto `note.author` on read, and a single
+// plain-text run collapses back into a bare string while a multi-run note stays an object carrying
+// its runs array plus exceljs's own margins/protection/editAs boilerplate. So the diff here is
+// deliberately narrow — the concatenated run text of each noted cell. Per the C1 finding, exceljs
+// only reads a note on a cell that also holds a value, so every noted cell below is valued too.
+
+function sampleNoteText(note: unknown): string | undefined {
+  if (note === undefined) return undefined;
+  if (typeof note === "string") return note;
+  const n = note as { texts?: Array<{ text: string }> };
+  return (n.texts ?? []).map((t) => t.text).join("");
+}
+
+function sampleNotes(
+  wb: AnyWorkbook,
+  sheetName: string,
+  addresses: string[],
+): Record<string, string | undefined> {
+  const ws = wb.getWorksheet(sheetName);
+  const out: Record<string, string | undefined> = {};
+  for (const addr of addresses) out[addr] = sampleNoteText(ws.getCell(addr).note);
+  return out;
+}
+
+describe("compat parity — cell comments", () => {
+  it("a plain-string note and a rich-text note match real exceljs after reload", async (ctx) => {
+    const RealExcelJS = await loadRealExceljs();
+    if (!RealExcelJS) {
+      ctx.skip();
+      return;
+    }
+    const CompatExcelJS = await loadCompatExceljs();
+
+    const build: Build = (wb) => {
+      const ws = wb.addWorksheet("Sheet1");
+      ws.getCell("A1").value = "annotated";
+      ws.getCell("A1").note = "hello";
+      ws.getCell("B1").value = "styled";
+      ws.getCell("B1").note = {
+        texts: [{ text: "bold", font: { bold: true } }, { text: " plain" }],
+      };
+    };
+
+    const real = new RealExcelJS.Workbook();
+    build(real);
+    const bufReal = (await real.xlsx.writeBuffer()) as Uint8Array;
+
+    const compat = new CompatExcelJS.Workbook();
+    build(compat);
+    const bufCompat = (await compat.xlsx.writeBuffer()) as Uint8Array;
+
+    const loadedReal = new RealExcelJS.Workbook();
+    await loadedReal.xlsx.load(Buffer.from(bufReal));
+    const loadedCompat = new RealExcelJS.Workbook();
+    await loadedCompat.xlsx.load(Buffer.from(bufCompat));
+
+    expect(sampleNotes(loadedCompat, "Sheet1", ["A1", "B1"])).toEqual(
+      sampleNotes(loadedReal, "Sheet1", ["A1", "B1"]),
+    );
+
+    // Our own reader recovers both too, with the author defaulted (exceljs never round-trips one).
+    const ours = readWorkbookBuffer(bufCompat);
+    const oursWs = ours.getWorksheet("Sheet1");
+    expect(oursWs?.getCell("A1").note).toEqual({
+      texts: { richText: [{ text: "hello" }] },
+      author: "Author",
+    });
+    expect(oursWs?.getCell("B1").note).toEqual({
+      texts: { richText: [{ text: "bold", font: { bold: true } }, { text: " plain" }] },
+      author: "Author",
+    });
+  });
+});
+
 describe("compat parity — conditional formatting (cellIs highlight + colorScale)", () => {
   it("rule type/operator/priority, the highlight argb, and the colorScale colours match real exceljs", async (ctx) => {
     const RealExcelJS = await loadRealExceljs();

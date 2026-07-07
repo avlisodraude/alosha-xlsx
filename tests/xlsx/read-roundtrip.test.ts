@@ -470,15 +470,29 @@ describe("read round-trip — comments (docs/COMMENTS-SPEC.md §2)", () => {
     const data = back.getWorksheet("Notes");
     if (!data) throw new Error("Notes sheet missing");
 
-    // Author defaults to "Author" (ExcelJS parity) when unset at write time.
-    expect(data.getCell("B2").note).toEqual({ texts: "hello", author: "Author" });
+    // A plain string always renders as a single <r><t> run (COMMENTS-SPEC §3, exceljs interop), so
+    // it reads back as a one-run RichText rather than the original string — a deliberate, documented
+    // trade-off (see MIGRATION.md). Author defaults to "Author" (ExcelJS parity) when unset at write time.
+    expect(data.getCell("B2").note).toEqual({
+      texts: { richText: [{ text: "hello" }] },
+      author: "Author",
+    });
     expect(data.getCell("C3").note).toEqual({
       texts: { richText: [{ text: "bold", font: { bold: true } }, { text: " plain" }] },
       author: "Alice",
     });
-    expect(data.getCell("A1").note).toEqual({ texts: "one", author: "Alice" });
-    expect(data.getCell("A2").note).toEqual({ texts: "two", author: "Bob" });
-    expect(data.getCell("A3").note).toEqual({ texts: "three", author: "Alice" });
+    expect(data.getCell("A1").note).toEqual({
+      texts: { richText: [{ text: "one" }] },
+      author: "Alice",
+    });
+    expect(data.getCell("A2").note).toEqual({
+      texts: { richText: [{ text: "two" }] },
+      author: "Bob",
+    });
+    expect(data.getCell("A3").note).toEqual({
+      texts: { richText: [{ text: "three" }] },
+      author: "Alice",
+    });
 
     // A cell with no comment carries no note.
     expect(data.getCell("D4").note).toBeUndefined();

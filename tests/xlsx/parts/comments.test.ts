@@ -31,7 +31,7 @@ function partData(rendered: RenderedWorksheet, path: string): string | undefined
 }
 
 describe("worksheet writer — comments.xml", () => {
-  it("renders a plain-string comment with the default author as a lone <t>", () => {
+  it("renders a plain-string comment with the default author as a single <r><t> run", () => {
     const rendered = render((ws) => {
       ws.getCell("B2").note = { texts: "hello" };
     });
@@ -42,8 +42,9 @@ describe("worksheet writer — comments.xml", () => {
     );
     // Author defaults to "Author" when unset (ExcelJS parity).
     expect(xml).toContain("<authors><author>Author</author></authors>");
+    // A run, not a lone <t> — exceljs's comment parser only reads <r> children (COMMENTS-SPEC §3).
     expect(xml).toContain(
-      '<commentList><comment ref="B2" authorId="0"><text><t>hello</t></text></comment></commentList>',
+      '<commentList><comment ref="B2" authorId="0"><text><r><t>hello</t></r></text></comment></commentList>',
     );
   });
 

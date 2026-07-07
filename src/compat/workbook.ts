@@ -31,7 +31,13 @@ import { encodeAddress } from "../address/index.js";
 import { UnsupportedFeatureError } from "../errors.js";
 import type { XlsxAccessor } from "../index.js";
 import { Cell, Column, Row, Workbook, Worksheet } from "../index.js";
-import { CellType, type ConditionalFormatting, type Style } from "../model/index.js";
+import {
+  CellType,
+  type Comment,
+  type ConditionalFormatting,
+  type RichTextRun,
+  type Style,
+} from "../model/index.js";
 import { applyExcelJsStyle } from "./style-compat.js";
 import { toExcelJSValueType } from "./value-type.js";
 
@@ -257,6 +263,40 @@ function denormalizeConditionalFormattings(cfs: readonly ConditionalFormatting[]
   });
 }
 
+/** ExcelJS's `cell.note` carries rich runs as a flat `texts: [{font, text}]` array (docs/COMMENTS-
+ *  SPEC.md §3); our core `Comment` wraps them in a `RichText` (`{ richText: [...] }`) to match the
+ *  richText cell-value shape everywhere else. Bridge at the `cell.note` setter boundary: a bare
+ *  string passes straight through, `{ texts: string, ... }` passes through with its runs re-wrapped,
+ *  and anything else (already our own `Comment` shape, e.g. `{ texts: { richText: [...] } }` from
+ *  native-API interop) passes through untouched. */
+function toCoreComment(value: unknown): Comment {
+  if (typeof value === "string") return { texts: value };
+  const v = value as { texts: unknown; author?: string };
+  const author = v.author;
+  if (typeof v.texts === "string") {
+    return author === undefined ? { texts: v.texts } : { texts: v.texts, author };
+  }
+  if (Array.isArray(v.texts)) {
+    const richText = { richText: v.texts as RichTextRun[] };
+    return author === undefined ? { texts: richText } : { texts: richText, author };
+  }
+  return value as Comment;
+}
+
+/** The inverse of {@link toCoreComment}, applied when a compat caller reads `cell.note` back: a
+ *  plain-string comment stays a string, and a rich one unwraps its `RichText` back into ExcelJS's
+ *  flat `texts` run array. */
+function toExcelJsNote(comment: Comment | undefined): unknown {
+  if (comment === undefined) return undefined;
+  if (typeof comment.texts === "string") {
+    return comment.author === undefined
+      ? comment.texts
+      : { texts: comment.texts, author: comment.author };
+  }
+  const texts = comment.texts.richText;
+  return comment.author === undefined ? { texts } : { texts, author: comment.author };
+}
+
 // --- the per-level proxies ----------------------------------------------------------------------
 
 function proxyCell(cell: Cell): Cell {
@@ -268,6 +308,8 @@ function proxyCell(cell: Cell): Cell {
       // Decision D1: compat cells always report ExcelJS ValueType numbers (§3).
       if (prop === "type") return toExcelJSValueType(target.type);
       if (prop === "effectiveType") return toExcelJSValueType(target.effectiveType);
+      // COMMENTS-SPEC.md §3: bridge our RichText-wrapped Comment to ExcelJS's flat texts array.
+      if (prop === "note") return toExcelJsNote(target.note);
       return reflectGet(target, prop);
     },
     set(target, prop, value) {
@@ -279,7 +321,8 @@ function proxyCell(cell: Cell): Cell {
         return true;
       }
       if (prop === "note") {
-        throw new UnsupportedFeatureError("cell.note (comments)", COMPAT_DEFER);
+        target.note = toCoreComment(value);
+        return true;
       }
       return Reflect.set(target, prop, value, target);
     },

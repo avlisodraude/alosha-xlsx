@@ -2,8 +2,11 @@
 //
 // An `<authors>` table (distinct authors, stable first-seen order) plus a `<commentList>` of
 // `<comment ref authorId>` entries, each wrapping a rich `<text>`. The `<text>` runs reuse the
-// shared-string run renderer (`renderRunProps` + `<r><t>`); a plain-string comment collapses to a
-// lone `<t>`. Pushed as an F0 `ExtraPart` with `contentType: CONTENT_TYPE.comments`.
+// shared-string run renderer (`renderRunProps` + `<r><t>`); a plain-string comment still renders as
+// a single run rather than a lone `<t>` — exceljs's comment parser only reads `<r>` children (see
+// COMMENTS-SPEC.md §3), so this keeps plain strings readable by both Excel and exceljs. The reader
+// (src/xlsx/read/comments.ts) tolerates either form via the shared `parseRichString`. Pushed as an
+// F0 `ExtraPart` with `contentType: CONTENT_TYPE.comments`.
 
 import type { RichText } from "../../model/index.js";
 import { XmlWriter } from "../../xml/index.js";
@@ -50,10 +53,13 @@ export function renderComments(comments: CommentRecord[]): string {
   return w.toString();
 }
 
-/** A plain string renders as a lone `<t>`; rich text renders one `<r>`/`<rPr>`/`<t>` per run. */
+/** A plain string renders as a single `<r><t>` run (not a lone `<t>` — exceljs only parses `<r>`
+ *  children, see the module header); rich text renders one `<r>`/`<rPr>`/`<t>` per run. */
 function renderCommentText(w: XmlWriter, texts: RichText | string): void {
   if (typeof texts === "string") {
+    w.open("r");
     w.el("t", texts);
+    w.close("r");
     return;
   }
   for (const run of texts.richText) {

@@ -255,6 +255,44 @@ describe("read foreign — conditional formatting", () => {
   });
 });
 
+describe("read foreign — comments", () => {
+  it("recovers a plain-string note and a rich-text note written by exceljs on valued cells", async (ctx) => {
+    const ExcelJS = await loadExcelJS();
+    if (!ExcelJS) {
+      ctx.skip();
+      return;
+    }
+
+    const src = new ExcelJS.Workbook();
+    const sheet = src.addWorksheet("Noted");
+    // exceljs only reads a note on a cell that also has a <c> value, so both noted cells are valued.
+    sheet.getCell("A1").value = "annotated";
+    sheet.getCell("A1").note = "hello";
+    sheet.getCell("B1").value = "styled";
+    sheet.getCell("B1").note = {
+      texts: [{ text: "bold", font: { bold: true } }, { text: " plain" }],
+    };
+
+    const buffer = await src.xlsx.writeBuffer();
+    const bytes = new Uint8Array(buffer as ArrayBuffer);
+
+    const wb = readWorkbookBuffer(bytes);
+    const ws = wb.getWorksheet("Noted");
+    expect(ws).toBeDefined();
+    if (!ws) return;
+
+    // exceljs's comments-xform hardcodes a single "Author" on write, so that's what our reader sees.
+    expect(ws.getCell("A1").note).toEqual({
+      texts: { richText: [{ text: "hello" }] },
+      author: "Author",
+    });
+    expect(ws.getCell("B1").note).toEqual({
+      texts: { richText: [{ text: "bold", font: { bold: true } }, { text: " plain" }] },
+      author: "Author",
+    });
+  });
+});
+
 describe("read foreign — panes + auto-filter", () => {
   it("recovers a frozen pane and auto-filter range written by exceljs", async (ctx) => {
     const ExcelJS = await loadExcelJS();
