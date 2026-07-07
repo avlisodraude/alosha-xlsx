@@ -254,3 +254,60 @@ describe("WorkbookWriter — edge cases", () => {
     expect(() => b.addRow([2]).commit()).toThrow(/commit it before writing/);
   });
 });
+
+describe("WorkbookWriter — column widths (<cols>)", () => {
+  it("streams column widths/styles/hidden flags equal to the buffered writer", async () => {
+    const columns = [{ width: 15 }, { width: 30, style: { font: { bold: true } } }];
+
+    const model = new WorkbookModel();
+    const bufferedWs = model.addWorksheet("Sheet1");
+    bufferedWs.columns = columns;
+    bufferedWs.addRow(["a", "b"]);
+    const buffered = writeWorkbookBuffer(model);
+
+    const wb = new WorkbookWriter();
+    const ws = wb.addWorksheet("Sheet1");
+    ws.columns = columns; // must be set before the first row commits
+    ws.addRow(["a", "b"]).commit();
+    ws.commit();
+    await wb.commit();
+    const streamed = await collect(wb);
+
+    expect(modelJson(readWorkbookBuffer(streamed))).toEqual(
+      modelJson(readWorkbookBuffer(buffered)),
+    );
+
+    const parsed = readWorkbookBuffer(streamed);
+    const sheet = parsed.getWorksheet("Sheet1");
+    expect(sheet?.getColumn(1).width).toBe(15);
+    expect(sheet?.getColumn(2).width).toBe(30);
+    expect(sheet?.getColumn(2).font?.bold).toBe(true);
+  });
+
+  it("supports getColumn for a single column's width/style, set before the first row commits", async () => {
+    const wb = new WorkbookWriter();
+    const ws = wb.addWorksheet("Sheet1");
+    ws.getColumn(2).width = 42;
+    ws.getColumn(2).hidden = true;
+    ws.addRow(["x", "y"]).commit();
+    ws.commit();
+    await wb.commit();
+
+    const parsed = readWorkbookBuffer(await collect(wb));
+    const sheet = parsed.getWorksheet("Sheet1");
+    expect(sheet?.getColumn(2).width).toBe(42);
+    expect(sheet?.getColumn(2).hidden).toBe(true);
+  });
+
+  it("ignores a column set after the first row commits (same rule as views/panes)", async () => {
+    const wb = new WorkbookWriter();
+    const ws = wb.addWorksheet("Sheet1");
+    ws.addRow(["a"]).commit(); // opens the part; the prologue (incl. <cols>) is already written
+    ws.getColumn(1).width = 99; // too late — has no effect on the emitted archive
+    ws.commit();
+    await wb.commit();
+
+    const parsed = readWorkbookBuffer(await collect(wb));
+    expect(parsed.getWorksheet("Sheet1")?.getColumn(1).width).toBeUndefined();
+  });
+});
