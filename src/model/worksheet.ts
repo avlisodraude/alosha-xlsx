@@ -18,6 +18,7 @@ import {
 import type { Cell } from "./cell.js";
 import type { CellValue } from "./cell-value.js";
 import { Column, type ColumnDefn, type ColumnRange } from "./column.js";
+import { type DataValidationModel, DataValidations } from "./data-validation.js";
 import { CellType } from "./enums.js";
 import { Row, type RowModel } from "./row.js";
 import type { Color, Style } from "./style.js";
@@ -71,6 +72,7 @@ export interface WorksheetModel {
   columns?: ColumnRange[];
   rows: RowModel[];
   merges: string[];
+  dataValidations?: DataValidationModel[];
   pageSetup?: unknown;
   headerFooter?: unknown;
 }
@@ -139,6 +141,8 @@ export class Worksheet implements WorksheetHost {
   private readonly _columnsByKey = new Map<string, Column>();
   /** Active merge regions keyed by their master (top-left) cell address. */
   private readonly _merges = new Map<string, Range>();
+  /** Data validations keyed by `sqref`; reached by cells through `WorksheetHost`. */
+  private readonly _dataValidations = new DataValidations();
 
   constructor(workbook: Workbook, id: number, name: string, orderNo: number) {
     this.workbook = workbook;
@@ -527,6 +531,13 @@ export class Worksheet implements WorksheetHost {
     return this._merges.size > 0;
   }
 
+  // --- data validations -------------------------------------------------------------------------
+
+  /** Range-keyed data-validation store (`add`/`find`/`remove`/`model`), mirroring ExcelJS. */
+  get dataValidations(): DataValidations {
+    return this._dataValidations;
+  }
+
   get dimensions(): Range {
     let top = Number.POSITIVE_INFINITY;
     let left = Number.POSITIVE_INFINITY;
@@ -561,6 +572,7 @@ export class Worksheet implements WorksheetHost {
       merges: [...this._merges.values()].map((r) => r.range),
     };
     if (columns) m.columns = columns;
+    if (this._dataValidations.size > 0) m.dataValidations = this._dataValidations.model;
     if (this.pageSetup !== undefined) m.pageSetup = this.pageSetup;
     if (this.headerFooter !== undefined) m.headerFooter = this.headerFooter;
     return m;
@@ -580,6 +592,7 @@ export class Worksheet implements WorksheetHost {
     this._columns.clear();
     this._columnsByKey.clear();
     this._merges.clear();
+    this._dataValidations.model = m.dataValidations ?? [];
 
     if (m.columns) {
       const cols = Column.fromModel(this, m.columns) ?? [];

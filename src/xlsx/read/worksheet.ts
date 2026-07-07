@@ -11,13 +11,18 @@
 
 import { decodeAddress } from "../../address/index.js";
 import { InvalidCellValueError } from "../../errors.js";
-import type {
-  CellError,
-  CellValue,
-  ErrorCode,
-  RichText,
-  Row,
-  Worksheet,
+import {
+  type CellError,
+  type CellValue,
+  DATA_VALIDATION_OPERATOR_TYPES,
+  type DataValidation,
+  type DataValidationErrorStyle,
+  type DataValidationOperator,
+  type DataValidationType,
+  type ErrorCode,
+  type RichText,
+  type Row,
+  type Worksheet,
 } from "../../model/index.js";
 import { cursor, localName, type XmlCursor, type XmlEvent } from "../../xml/index.js";
 import { serialToDate } from "../date.js";
@@ -43,6 +48,12 @@ interface HyperlinkRef {
   tooltip?: string;
 }
 
+/** A parsed `<dataValidation>`, paired with the `sqref` it registers under. */
+interface DataValidationRef {
+  sqref: string;
+  dv: DataValidation;
+}
+
 /** Populate an already-created {@link Worksheet} from its sheetN.xml. */
 export function parseWorksheet(ws: Worksheet, xml: string, ctx: WorksheetReadContext): void {
   const c = cursor(xml);
@@ -55,6 +66,7 @@ export function parseWorksheet(ws: Worksheet, xml: string, ctx: WorksheetReadCon
   // way and resolved last, once the display-text cells they point at already hold their string value.
   const merges: string[] = [];
   const hyperlinks: HyperlinkRef[] = [];
+  const dataValidations: DataValidationRef[] = [];
 
   c.eachChild(ev.name, (child) => {
     switch (localName(child.name)) {
@@ -67,6 +79,9 @@ export function parseWorksheet(ws: Worksheet, xml: string, ctx: WorksheetReadCon
       case "mergeCells":
         if (!child.selfClosing) collectMerges(c, child.name, merges);
         break;
+      case "dataValidations":
+        if (!child.selfClosing) collectDataValidations(c, child.name, dataValidations);
+        break;
       case "hyperlinks":
         if (!child.selfClosing) collectHyperlinks(c, child.name, hyperlinks);
         break;
@@ -76,6 +91,7 @@ export function parseWorksheet(ws: Worksheet, xml: string, ctx: WorksheetReadCon
   });
 
   for (const ref of merges) ws.mergeCells(ref);
+  for (const { sqref, dv } of dataValidations) ws.dataValidations.add(sqref, dv);
   if (ctx.rels) {
     for (const link of hyperlinks) applyHyperlink(ws, link, ctx.rels);
   }
@@ -287,6 +303,95 @@ function collectMerges(c: XmlCursor, container: string, merges: string[]): void 
     } else if (!mergeCell.selfClosing) {
       c.textUntilClose(mergeCell.name);
     }
+  });
+}
+
+const KNOWN_DATA_VALIDATION_TYPES = new Set<DataValidationType>([
+  "list",
+  "whole",
+  "decimal",
+  "date",
+  "time",
+  "textLength",
+  "custom",
+]);
+
+/** A `<formula1>`/`<formula2>` body: numeric for the operator types when it's a plain number
+ *  literal (matching the writer's `String(number)`), otherwise kept as-is (a formula/cell ref, or
+ *  the quoted inline list / range text for `list`). */
+function parseFormulaValue(type: DataValidationType, text: string): string | number {
+  if (DATA_VALIDATION_OPERATOR_TYPES.has(type) && /^-?\d+(\.\d+)?$/.test(text)) {
+    return Number(text);
+  }
+  return text;
+}
+
+/** Collect `<dataValidation>` entries (paired with their `sqref`), applied to the worksheet's
+ *  manager after the full child walk — order-independent, like merges/hyperlinks. An entry with
+ *  no `sqref` or an unrecognized `type` is malformed and skipped, never thrown. */
+function collectDataValidations(c: XmlCursor, container: string, out: DataValidationRef[]): void {
+  c.eachChild(container, (child) => {
+    if (localName(child.name) !== "dataValidation") {
+      if (!child.selfClosing) c.textUntilClose(child.name);
+      return;
+    }
+
+    const sqref = child.attrs.sqref;
+    const type = child.attrs.type;
+    if (
+      sqref === undefined ||
+      type === undefined ||
+      !KNOWN_DATA_VALIDATION_TYPES.has(type as DataValidationType)
+    ) {
+      if (!child.selfClosing) c.textUntilClose(child.name);
+      return;
+    }
+    const dvType = type as DataValidationType;
+
+    let formula1: string | undefined;
+    let formula2: string | undefined;
+    if (!child.selfClosing) {
+      c.eachChild(child.name, (f) => {
+        switch (localName(f.name)) {
+          case "formula1":
+            formula1 = f.selfClosing ? "" : c.textUntilClose(f.name);
+            break;
+          case "formula2":
+            formula2 = f.selfClosing ? "" : c.textUntilClose(f.name);
+            break;
+          default:
+            if (!f.selfClosing) c.textUntilClose(f.name);
+        }
+      });
+    }
+
+    const dv: DataValidation = { type: dvType };
+    if (DATA_VALIDATION_OPERATOR_TYPES.has(dvType)) {
+      // ST_DataValidationOperator defaults to "between" when the attribute is absent (ECMA-376;
+      // ExcelJS's own reader applies the same default), so a foreign file that omits it for a
+      // between-style validation still resolves to the correct operator.
+      dv.operator = (child.attrs.operator as DataValidationOperator | undefined) ?? "between";
+    }
+    if (truthy(child.attrs.allowBlank)) dv.allowBlank = true;
+    if (truthy(child.attrs.showInputMessage)) dv.showInputMessage = true;
+    if (truthy(child.attrs.showErrorMessage)) dv.showErrorMessage = true;
+    // OOXML footgun: `showDropDown="1"` HIDES the dropdown, so its presence inverts to `false`;
+    // its absence leaves the model's `showDropDown` unset (the default, shown).
+    if (truthy(child.attrs.showDropDown)) dv.showDropDown = false;
+    if (child.attrs.errorStyle !== undefined) {
+      dv.errorStyle = child.attrs.errorStyle as DataValidationErrorStyle;
+    }
+    if (child.attrs.errorTitle !== undefined) dv.errorTitle = child.attrs.errorTitle;
+    if (child.attrs.error !== undefined) dv.error = child.attrs.error;
+    if (child.attrs.promptTitle !== undefined) dv.promptTitle = child.attrs.promptTitle;
+    if (child.attrs.prompt !== undefined) dv.prompt = child.attrs.prompt;
+
+    const formulae: (string | number)[] = [];
+    if (formula1 !== undefined) formulae.push(parseFormulaValue(dvType, formula1));
+    if (formula2 !== undefined) formulae.push(parseFormulaValue(dvType, formula2));
+    if (formulae.length > 0) dv.formulae = formulae;
+
+    out.push({ sqref, dv });
   });
 }
 

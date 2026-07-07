@@ -522,3 +522,240 @@ describe("parseWorksheet — hyperlinks", () => {
     expect(s.getCell("A1").value).toBe("Plain");
   });
 });
+
+// --- <dataValidations> reconstruction ------------------------------------------------------------
+
+describe("parseWorksheet — data validations", () => {
+  it("parses an inline list dropdown", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<dataValidations count="1"><dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1" sqref="A1">` +
+          `<formula1>"Yes,No,Maybe"</formula1></dataValidation></dataValidations>`,
+      ),
+      ctx(),
+    );
+
+    expect(s.dataValidations.find("A1")).toEqual({
+      type: "list",
+      allowBlank: true,
+      showInputMessage: true,
+      showErrorMessage: true,
+      formulae: ['"Yes,No,Maybe"'],
+    });
+  });
+
+  it("parses a same-sheet range list dropdown", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<dataValidations count="1"><dataValidation type="list" sqref="A1:A10">` +
+          `<formula1>$E$1:$E$5</formula1></dataValidation></dataValidations>`,
+      ),
+      ctx(),
+    );
+
+    expect(s.dataValidations.find("A5")).toEqual({ type: "list", formulae: ["$E$1:$E$5"] });
+  });
+
+  it("parses a decimal between with two numeric formulae", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<dataValidations count="1"><dataValidation type="decimal" operator="between" sqref="B2">` +
+          `<formula1>0.5</formula1><formula2>9.5</formula2></dataValidation></dataValidations>`,
+      ),
+      ctx(),
+    );
+
+    expect(s.dataValidations.find("B2")).toEqual({
+      type: "decimal",
+      operator: "between",
+      formulae: [0.5, 9.5],
+    });
+  });
+
+  it('defaults operator to "between" when absent on an operator type (ECMA-376/ExcelJS default)', () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<dataValidations count="1"><dataValidation type="decimal" sqref="B2">` +
+          `<formula1>0</formula1><formula2>100</formula2></dataValidation></dataValidations>`,
+      ),
+      ctx(),
+    );
+
+    expect(s.dataValidations.find("B2")).toEqual({
+      type: "decimal",
+      operator: "between",
+      formulae: [0, 100],
+    });
+  });
+
+  it("keeps a non-numeric formula (cell ref) as a string for an operator type", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<dataValidations count="1"><dataValidation type="whole" operator="greaterThan" sqref="C3">` +
+          `<formula1>$D$1</formula1></dataValidation></dataValidations>`,
+      ),
+      ctx(),
+    );
+
+    expect(s.dataValidations.find("C3")).toEqual({
+      type: "whole",
+      operator: "greaterThan",
+      formulae: ["$D$1"],
+    });
+  });
+
+  it("parses a custom rule with no operator", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<dataValidations count="1"><dataValidation type="custom" sqref="D4">` +
+          `<formula1>ISNUMBER(D4)</formula1></dataValidation></dataValidations>`,
+      ),
+      ctx(),
+    );
+
+    expect(s.dataValidations.find("D4")).toEqual({
+      type: "custom",
+      formulae: ["ISNUMBER(D4)"],
+    });
+  });
+
+  it("ignores a stray operator attribute on a list type (never gated to that type)", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<dataValidations count="1"><dataValidation type="list" operator="between" sqref="A1">` +
+          `<formula1>"a,b"</formula1></dataValidation></dataValidations>`,
+      ),
+      ctx(),
+    );
+
+    expect(s.dataValidations.find("A1")?.operator).toBeUndefined();
+  });
+
+  it("parses the message/error attributes", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<dataValidations count="1"><dataValidation type="textLength" operator="lessThanOrEqual" showErrorMessage="1" errorStyle="warning" errorTitle="Too long" error="Keep it short" promptTitle="Note" prompt="Enter a short code" sqref="E5">` +
+          `<formula1>8</formula1></dataValidation></dataValidations>`,
+      ),
+      ctx(),
+    );
+
+    expect(s.dataValidations.find("E5")).toEqual({
+      type: "textLength",
+      operator: "lessThanOrEqual",
+      showErrorMessage: true,
+      errorStyle: "warning",
+      errorTitle: "Too long",
+      error: "Keep it short",
+      promptTitle: "Note",
+      prompt: "Enter a short code",
+      formulae: [8],
+    });
+  });
+
+  it("inverts showDropDown: attr present → model false", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<dataValidations count="1"><dataValidation type="list" showDropDown="1" sqref="F6">` +
+          `<formula1>"a,b"</formula1></dataValidation></dataValidations>`,
+      ),
+      ctx(),
+    );
+
+    expect(s.dataValidations.find("F6")?.showDropDown).toBe(false);
+  });
+
+  it("leaves showDropDown unset when the attribute is absent (dropdown shown)", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<dataValidations count="1"><dataValidation type="list" sqref="F7">` +
+          `<formula1>"a,b"</formula1></dataValidation></dataValidations>`,
+      ),
+      ctx(),
+    );
+
+    expect(s.dataValidations.find("F7")).not.toHaveProperty("showDropDown");
+  });
+
+  it("registers each entry under its own sqref, independent of document order relative to other blocks", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<dataValidations count="2">` +
+          `<dataValidation type="list" sqref="A1"><formula1>"a,b"</formula1></dataValidation>` +
+          `<dataValidation type="custom" sqref="B1"><formula1>TRUE()</formula1></dataValidation>` +
+          `</dataValidations>`,
+      ),
+      ctx(),
+    );
+
+    expect(s.dataValidations.find("A1")?.type).toBe("list");
+    expect(s.dataValidations.find("B1")?.type).toBe("custom");
+  });
+
+  it("resolves an address against a multi-range sqref", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<dataValidations count="1"><dataValidation type="list" sqref="A1:A3 C1:C3">` +
+          `<formula1>"a,b"</formula1></dataValidation></dataValidations>`,
+      ),
+      ctx(),
+    );
+
+    expect(s.dataValidations.find("C2")?.type).toBe("list");
+    expect(s.dataValidations.find("B2")).toBeUndefined();
+  });
+
+  it("skips an entry missing sqref, never throwing", () => {
+    const s = sheet();
+    expect(() =>
+      parseWorksheet(
+        s,
+        ws(
+          `<dataValidations count="1"><dataValidation type="list">` +
+            `<formula1>"a,b"</formula1></dataValidation></dataValidations>`,
+        ),
+        ctx(),
+      ),
+    ).not.toThrow();
+    expect(s.dataValidations.size).toBe(0);
+  });
+
+  it("skips an entry with an unrecognized type, never throwing", () => {
+    const s = sheet();
+    expect(() =>
+      parseWorksheet(
+        s,
+        ws(
+          `<dataValidations count="1"><dataValidation type="bogus" sqref="A1">` +
+            `<formula1>x</formula1></dataValidation></dataValidations>`,
+        ),
+        ctx(),
+      ),
+    ).not.toThrow();
+    expect(s.dataValidations.find("A1")).toBeUndefined();
+  });
+});

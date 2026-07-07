@@ -162,37 +162,78 @@ describe("compat facade — deferred surface throws UnsupportedFeatureError (§6
     expect(() => (wb as unknown as { media: unknown }).media).toThrow(UnsupportedFeatureError);
   });
 
-  it("worksheet-level: addImage / addTable / conditional formatting / protect / data validation", () => {
+  it("worksheet-level: addImage / addTable / conditional formatting / protect", () => {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("S") as unknown as {
       addImage: () => void;
       addTable: () => void;
       addConditionalFormatting: () => void;
       protect: () => void;
-      dataValidations: unknown;
     };
     expect(() => ws.addImage()).toThrow(UnsupportedFeatureError);
     expect(() => ws.addTable()).toThrow(UnsupportedFeatureError);
     expect(() => ws.addConditionalFormatting()).toThrow(UnsupportedFeatureError);
     expect(() => ws.protect()).toThrow(UnsupportedFeatureError);
-    expect(() => ws.dataValidations).toThrow(UnsupportedFeatureError);
   });
 
-  it("cell-level: note (comments) and dataValidation", () => {
+  it("cell-level: note (comments)", () => {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("S");
-    const cell = ws.getCell("A1") as unknown as { note: unknown; dataValidation: unknown };
+    const cell = ws.getCell("A1") as unknown as { note: unknown };
     expect(() => {
       cell.note = "hi";
-    }).toThrow(UnsupportedFeatureError);
-    expect(() => {
-      cell.dataValidation = {};
     }).toThrow(UnsupportedFeatureError);
   });
 
   it("namespace-level: stream.xlsx.WorkbookWriter / WorkbookReader", () => {
     expect(() => new ExcelJS.stream.xlsx.WorkbookWriter()).toThrow(UnsupportedFeatureError);
     expect(() => new ExcelJS.stream.xlsx.WorkbookReader()).toThrow(UnsupportedFeatureError);
+  });
+});
+
+describe("compat facade — data validation is a real pass-through (DATA-VALIDATION-SPEC §5)", () => {
+  it("cell.dataValidation get/set reaches the core accessor", () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("S");
+    const cell = ws.getCell("A1") as unknown as {
+      dataValidation: {
+        type: string;
+        allowBlank?: boolean;
+        formulae?: (string | number)[];
+      };
+    };
+
+    cell.dataValidation = { type: "list", allowBlank: true, formulae: ['"Yes,No"'] };
+    expect(cell.dataValidation).toEqual({
+      type: "list",
+      allowBlank: true,
+      formulae: ['"Yes,No"'],
+    });
+  });
+
+  it("worksheet.dataValidations exposes the ExcelJS-shaped manager (add/find/remove/model)", () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("S") as unknown as {
+      dataValidations: {
+        add: (sqref: string, dv: unknown) => unknown;
+        find: (address: string) => unknown;
+        remove: (sqref: string) => void;
+        model: unknown[];
+      };
+    };
+
+    ws.dataValidations.add("B2:B10", { type: "decimal", operator: "between", formulae: [0, 1] });
+    expect(ws.dataValidations.find("B5")).toEqual({
+      type: "decimal",
+      operator: "between",
+      formulae: [0, 1],
+    });
+    expect(ws.dataValidations.model).toEqual([
+      { sqref: "B2:B10", type: "decimal", operator: "between", formulae: [0, 1] },
+    ]);
+
+    ws.dataValidations.remove("B2:B10");
+    expect(ws.dataValidations.find("B5")).toBeUndefined();
   });
 });
 

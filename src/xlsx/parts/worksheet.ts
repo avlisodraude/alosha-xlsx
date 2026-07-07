@@ -9,8 +9,13 @@
 //   hyperlink-> its display text as a string            formula -> <f>expr</f> + typed cached <v>
 //   merge-slave / styled-empty -> empty <c> carrying only its style   null (no style) -> skipped
 
-import type { CellModel } from "../../model/index.js";
-import { CellType, type RichText, type Worksheet } from "../../model/index.js";
+import type { CellModel, DataValidationModel } from "../../model/index.js";
+import {
+  CellType,
+  DATA_VALIDATION_OPERATOR_TYPES,
+  type RichText,
+  type Worksheet,
+} from "../../model/index.js";
 import { XmlWriter } from "../../xml/index.js";
 import { dateToSerial } from "../date.js";
 import type { SharedStrings } from "../shared-strings.js";
@@ -67,7 +72,8 @@ export function renderWorksheet(ws: Worksheet, ctx: WorksheetContext): RenderedW
   renderCols(w, model.columns, ctx);
   renderSheetData(w, model.rows, ctx, hyperlinks);
   renderMergeCells(w, model.merges);
-  // CT_Worksheet order: `<hyperlinks>` sits after `<mergeCells>`.
+  // CT_Worksheet order: `<dataValidations>` sits after `<mergeCells>`, `<hyperlinks>` after that.
+  renderDataValidations(w, model.dataValidations);
   const rels = renderHyperlinks(w, hyperlinks);
 
   w.close("worksheet");
@@ -262,6 +268,47 @@ function renderMergeCells(w: XmlWriter, merges: string[]): void {
   w.open("mergeCells", { count: merges.length });
   for (const ref of merges) w.leaf("mergeCell", { ref });
   w.close("mergeCells");
+}
+
+/** Emit the `<dataValidations>` block (dropdowns + value constraints). Lives entirely in the sheet —
+ *  no relationships or extra parts. See docs/DATA-VALIDATION-SPEC.md §3. */
+function renderDataValidations(w: XmlWriter, validations: DataValidationModel[] | undefined): void {
+  if (!validations || validations.length === 0) return;
+
+  w.open("dataValidations", { count: validations.length });
+  for (const dv of validations) {
+    // `operator` is meaningful only for the numeric/length types; `formula2` only for a two-sided
+    // comparison (`between`/`notBetween`).
+    const operator = DATA_VALIDATION_OPERATOR_TYPES.has(dv.type) ? dv.operator : undefined;
+    w.open("dataValidation", {
+      type: (dv.type as string) === "none" ? undefined : dv.type,
+      operator,
+      allowBlank: dv.allowBlank || undefined,
+      // OOXML footgun: `showDropDown="1"` HIDES the dropdown. So emit it only when the model
+      // explicitly hides it (`showDropDown === false`); the default (unset/true) shows it.
+      showDropDown: dv.showDropDown === false ? true : undefined,
+      showInputMessage: dv.showInputMessage || undefined,
+      showErrorMessage: dv.showErrorMessage || undefined,
+      errorStyle: dv.errorStyle,
+      errorTitle: dv.errorTitle,
+      error: dv.error,
+      promptTitle: dv.promptTitle,
+      prompt: dv.prompt,
+      sqref: dv.sqref,
+    });
+
+    const formulae = dv.formulae;
+    if (formulae && formulae[0] !== undefined) w.el("formula1", String(formulae[0]));
+    if (
+      (operator === "between" || operator === "notBetween") &&
+      formulae &&
+      formulae[1] !== undefined
+    ) {
+      w.el("formula2", String(formulae[1]));
+    }
+    w.close("dataValidation");
+  }
+  w.close("dataValidations");
 }
 
 /** Emit the `<hyperlinks>` block, assigning each link a worksheet-local `rId${n}`. Returns the

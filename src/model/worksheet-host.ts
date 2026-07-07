@@ -7,6 +7,7 @@
 // exposes `getRow` as part of its own public API (SPEC §7), so implementing it here costs nothing.
 
 import type { Column } from "./column.js";
+import type { DataValidations } from "./data-validation.js";
 import type { Row } from "./row.js";
 
 export interface WorksheetHost {
@@ -15,6 +16,8 @@ export interface WorksheetHost {
   getRow(row: number): Row;
   eachRow(cb: (row: Row, n: number) => void): void;
   eachRow(opts: { includeEmpty: boolean }, cb: (row: Row, n: number) => void): void;
+  /** Range-keyed data-validation store; `cell.dataValidation` reads/writes through it. */
+  readonly dataValidations: DataValidations;
   readonly properties: { outlineLevelCol: number; outlineLevelRow: number } & Record<
     string,
     unknown
