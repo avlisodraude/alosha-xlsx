@@ -7,6 +7,14 @@ import { cursor } from "../../xml/index.js";
 import { readZipArchive, type ZipEntries } from "../../zip-layer.js";
 import { CONTENT_TYPE, PART_PATH, REL_TYPE } from "../parts/constants.js";
 
+/** A relationship resolved from some part's `.rels` sibling. `target` is package-root-relative for
+ *  `mode: "Internal"`; left verbatim (a URL/mailto, not a package path) for `mode: "External"`. */
+export interface ResolvedRel {
+  type: string;
+  target: string;
+  mode: "Internal" | "External";
+}
+
 /** Resolved OOXML package parts, discovered via the OPC relationships. */
 export interface PackageParts {
   /** Raw bytes of a part, or `undefined` if the archive has no such entry. */
@@ -17,12 +25,17 @@ export interface PackageParts {
   workbookRels(): Map<string, { type: string; target: string }>;
   /** Absolute path of the workbook part from `_rels/.rels` (normally `xl/workbook.xml`). */
   workbookPath(): string;
+  /** rId -> relationship info from an arbitrary part's own `.rels` sibling (e.g. a worksheet's
+   *  `xl/worksheets/_rels/sheetN.xml.rels`, holding its hyperlink relationships). Returns an empty
+   *  map when the part has no `.rels` sibling. */
+  partRels(partPath: string): Map<string, ResolvedRel>;
 }
 
 interface RelEntry {
   id: string;
   type: string;
   target: string;
+  mode: "Internal" | "External";
 }
 
 const decoder = new TextDecoder();
@@ -68,11 +81,26 @@ export function openPackage(bytes: Uint8Array): PackageParts {
     }
   }
 
+  /** rId -> relationship info for an arbitrary part, resolving `Internal` targets against that
+   *  part's own directory and leaving `External` targets (URLs) untouched. */
+  const partRels = (partPath: string): Map<string, ResolvedRel> => {
+    const dir = dirname(partPath);
+    const relsXml = text(relsPathFor(partPath));
+    const map = new Map<string, ResolvedRel>();
+    if (relsXml === undefined) return map;
+    for (const rel of parseRels(relsXml)) {
+      const target = rel.mode === "External" ? rel.target : resolveRelTarget(dir, rel.target);
+      map.set(rel.id, { type: rel.type, target, mode: rel.mode });
+    }
+    return map;
+  };
+
   return {
     entry,
     text,
     workbookRels: () => relsMap,
     workbookPath: () => workbookPath,
+    partRels,
   };
 }
 
@@ -99,6 +127,7 @@ function parseRels(xml: string): RelEntry[] {
         id: child.attrs.Id ?? "",
         type: child.attrs.Type ?? "",
         target: child.attrs.Target ?? "",
+        mode: child.attrs.TargetMode === "External" ? "External" : "Internal",
       });
     });
   }

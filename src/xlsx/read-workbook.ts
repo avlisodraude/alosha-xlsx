@@ -46,7 +46,9 @@ export function readWorkbookBuffer(bytes: Uint8Array, _options?: ReadOptions): W
     const target = rels.get(sheet.rId)?.target;
     if (target === undefined) continue;
     const sheetXml = pkg.text(target);
-    if (sheetXml !== undefined) parseWorksheet(ws, sheetXml, ctx);
+    if (sheetXml !== undefined) {
+      parseWorksheet(ws, sheetXml, { ...ctx, rels: pkg.partRels(target) });
+    }
   }
 
   // Doc-props sit at their conventional paths (both our writer and Excel/LibreOffice use these).

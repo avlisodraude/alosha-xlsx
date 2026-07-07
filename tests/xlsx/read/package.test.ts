@@ -120,6 +120,47 @@ describe("openPackage — happy path (hand-built minimal package)", () => {
     );
     expect(parts.workbookRels().size).toBe(0);
   });
+
+  it("partRels resolves a worksheet's own .rels sibling, external targets left as-is", () => {
+    const parts = openPackage(
+      writeZipArchive(
+        minimalPackage({
+          "xl/worksheets/_rels/sheet1.xml.rels": `<?xml version="1.0"?><Relationships xmlns="pr">
+            <Relationship Id="rId1" Type="hyperlink" Target="https://example.com" TargetMode="External"/>
+          </Relationships>`,
+        }),
+      ),
+    );
+    const rels = parts.partRels("xl/worksheets/sheet1.xml");
+    expect(rels.get("rId1")).toEqual({
+      type: "hyperlink",
+      target: "https://example.com",
+      mode: "External",
+    });
+  });
+
+  it("partRels resolves an internal target relative to the part's own directory", () => {
+    const parts = openPackage(
+      writeZipArchive(
+        minimalPackage({
+          "xl/worksheets/_rels/sheet1.xml.rels": `<?xml version="1.0"?><Relationships xmlns="pr">
+            <Relationship Id="rId1" Type="image" Target="../media/image1.png"/>
+          </Relationships>`,
+        }),
+      ),
+    );
+    const rels = parts.partRels("xl/worksheets/sheet1.xml");
+    expect(rels.get("rId1")).toEqual({
+      type: "image",
+      target: "xl/media/image1.png",
+      mode: "Internal",
+    });
+  });
+
+  it("partRels returns an empty map when the part has no .rels sibling", () => {
+    const parts = openPackage(writeZipArchive(minimalPackage()));
+    expect(parts.partRels("xl/worksheets/sheet1.xml").size).toBe(0);
+  });
 });
 
 describe("openPackage — errors", () => {

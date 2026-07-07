@@ -424,3 +424,101 @@ describe("parseWorksheet — round-trip through the writer", () => {
     expect(dst.getCell("B5").isMerged).toBe(true);
   });
 });
+
+// --- <hyperlinks> reconstruction ----------------------------------------------------------------------
+
+describe("parseWorksheet — hyperlinks", () => {
+  it("reconstructs { text, hyperlink, tooltip } from a <hyperlinks> block + rels map", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData>` +
+          `<hyperlinks><hyperlink ref="A1" r:id="rId1" tooltip="Visit"/></hyperlinks>`,
+      ),
+      ctx({
+        sharedStrings: ["Anthropic"],
+        rels: new Map([
+          ["rId1", { type: "hyperlink", target: "https://anthropic.com", mode: "External" }],
+        ]),
+      }),
+    );
+
+    expect(s.getCell("A1").type).toBe(CellType.Hyperlink);
+    expect(s.getCell("A1").value).toEqual({
+      text: "Anthropic",
+      hyperlink: "https://anthropic.com",
+      tooltip: "Visit",
+    });
+  });
+
+  it("omits tooltip from the model value when the XML carries none", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData>` +
+          `<hyperlinks><hyperlink ref="A1" r:id="rId1"/></hyperlinks>`,
+      ),
+      ctx({
+        sharedStrings: ["Mail us"],
+        rels: new Map([
+          ["rId1", { type: "hyperlink", target: "mailto:hi@example.com", mode: "External" }],
+        ]),
+      }),
+    );
+
+    const value = s.getCell("A1").value;
+    expect(value).toEqual({ text: "Mail us", hyperlink: "mailto:hi@example.com" });
+    expect(value).not.toHaveProperty("tooltip");
+  });
+
+  it("applies a range ref to its top-left cell only", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1"/></row></sheetData>` +
+          `<hyperlinks><hyperlink ref="A1:B1" r:id="rId1"/></hyperlinks>`,
+      ),
+      ctx({
+        sharedStrings: ["Link"],
+        rels: new Map([
+          ["rId1", { type: "hyperlink", target: "https://example.com", mode: "External" }],
+        ]),
+      }),
+    );
+
+    expect(s.getCell("A1").type).toBe(CellType.Hyperlink);
+    expect(s.getCell("B1").type).not.toBe(CellType.Hyperlink);
+  });
+
+  it("leaves the cell as a plain string when rels are absent from the read context", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData>` +
+          `<hyperlinks><hyperlink ref="A1" r:id="rId1"/></hyperlinks>`,
+      ),
+      ctx({ sharedStrings: ["Plain"] }),
+    );
+
+    expect(s.getCell("A1").value).toBe("Plain");
+    expect(s.getCell("A1").type).toBe(CellType.String);
+  });
+
+  it("skips a hyperlink whose r:id is not in the rels map (malformed package)", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData>` +
+          `<hyperlinks><hyperlink ref="A1" r:id="rId9"/></hyperlinks>`,
+      ),
+      ctx({ sharedStrings: ["Plain"], rels: new Map() }),
+    );
+
+    expect(s.getCell("A1").value).toBe("Plain");
+  });
+});
