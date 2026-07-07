@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.11.0
+
+### Minor Changes
+
+- Follow-up batch: streaming column widths, a real compat streaming writer, and two conditional-formatting parity fixes.
+
+  - **Streaming column-width support (`<cols>`).** The streaming `WorksheetWriter` now exposes
+    `columns` / `getColumn` (widths, styles, hidden/outline flags), backed by its real model
+    worksheet and emitted in the sheet prologue after `<sheetFormatPr>` (CT_Worksheet order).
+    Same rule as `views`/`properties`: configure columns **before the first row commits** — a
+    column set afterward is silently ignored. This closes the 0.10.0 known limitation; streaming
+    now has full feature parity with the buffered writer (write-side).
+
+  - **`ExcelJS.stream.xlsx.WorkbookWriter` in `@alosha/xlsx/compat` is a real bridge** onto the
+    streaming writer instead of a throwing stub (MIGRATION.md D6). Constructor options
+    `filename`/`stream`/`useSharedStrings`/`useStyles` (plus `creator`/`lastModifiedBy`/`created`/
+    `modified`) map through; the full ExcelJS lifecycle works (`addWorksheet()` →
+    `ws.addRow(...).commit()` → `ws.commit()` → `await workbook.commit()`), with rows/cells proxied
+    like the buffered compat facade (ExcelJS `cell.type` numbers, whole-object style setters,
+    `cell.note`). Options with no streaming equivalent — `zip`, `lastPrinted`, and `addWorksheet`'s
+    `pageSetup`/`headerFooter`/per-sheet `useSharedStrings` — throw `UnsupportedFeatureError`
+    rather than being silently dropped. `stream.xlsx.WorkbookReader` still throws (no streaming
+    reader yet).
+
+  - **Conditional-formatting compat parity (closes both MIGRATION.md D3 divergences).**
+    `removeConditionalFormatting` now accepts ExcelJS's index, predicate, and no-argument
+    (clear-all) forms, resolved onto the core's by-ref removal. The text-contains family is
+    bridged bidirectionally: ExcelJS's `{ type: "containsText", operator: "beginsWith" | "endsWith"
+    | "notContains" | "containsText" }` shape normalizes to the core's per-variant `type` on
+    `addConditionalFormatting`, and `conditionalFormattings` always reads back the ExcelJS shape.
+
+  - **Lint cleanup:** removed the last `noNonNullAssertion` warning in the buffered write
+    orchestrator; `pnpm lint` is warning-free.
+
 ## 0.10.0
 
 ### Minor Changes
