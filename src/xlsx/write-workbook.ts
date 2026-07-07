@@ -50,9 +50,18 @@ export function writeWorkbookBuffer(wb: Workbook, options?: WriteOptions): Uint8
   // When styles are disabled, cells intern nothing (always `s=0`); styles.xml still ships the baseline.
   const cellStyles: Styles = useStyles
     ? styles
-    : { addStyle: () => 0, toXml: styles.toXml.bind(styles) };
+    : { addStyle: () => 0, addDxf: () => 0, toXml: styles.toXml.bind(styles) };
 
-  const ctx = { styles: cellStyles, sharedStrings, useSharedStrings, date1904 };
+  // Conditional-format rules with no explicit priority draw from a single workbook-monotonic counter,
+  // shared across every sheet's render pass (mirrors ExcelJS).
+  let cfPriority = 0;
+  const ctx = {
+    styles: cellStyles,
+    sharedStrings,
+    useSharedStrings,
+    date1904,
+    nextPriority: () => ++cfPriority,
+  };
 
   // 1. Worksheets first — this is what fills the shared-strings and styles pools.
   const worksheetXml = new Map<string, RenderedWorksheet>();

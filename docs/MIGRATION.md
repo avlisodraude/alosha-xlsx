@@ -28,7 +28,7 @@ main [`README.md`](../README.md#migrating-from-exceljs) instead — that's a dee
 `worksheets`, an object-shaped `inheritFrom` instead of the `'i'|'o'|'i+'|'o+'` DSL, etc.) with more
 freedom to diverge, since it doesn't have to stay drop-in compatible.
 
-## Two behavioural notes — read these before porting
+## Three behavioural notes — read these before porting
 
 **D1 — `cell.type` / `cell.effectiveType` report ExcelJS's numbers, not `@alosha/xlsx`'s own.**
 `@alosha/xlsx`'s core `CellType` enum shares names with ExcelJS's `ValueType` but **not** the same
@@ -46,6 +46,25 @@ from ExcelJS relies on the latter to render identically, so compat-mode style se
 (`font`/`fill`/`border`/`alignment`/`protection`/`numFmt`) always apply ExcelJS's whole-object precedence,
 never the core's field merge. Again, this is scoped to compat-constructed workbooks; the plain
 `@alosha/xlsx` API is unaffected.
+
+**D3 — conditional formatting: the colour bridge is bidirectional, but two shapes are *not* bridged.**
+`worksheet.addConditionalFormatting`/`conditionalFormattings` normalize a `colorScale`/`dataBar` rule's
+colour between ExcelJS's `{ argb }` object and the core model's bare ARGB string automatically — pass
+either shape in, and `conditionalFormattings` always reads back ExcelJS's `{ argb }` form. Two other
+shapes are **not** bridged, by design (out of scope for the 0.7.0 pass):
+- **The text-contains family's `type`/`operator` split.** Real ExcelJS represents `beginsWith`,
+  `endsWith`, `notContainsText`, etc. as `{ type: "containsText", operator: "beginsWith", … }` — a
+  single `type` with the real variant carried on `operator`. `@alosha/xlsx`'s core model instead uses
+  a literal `type` per variant (`{ type: "beginsWith", … }`, no `operator` field). Construct these
+  rules with **the core's shape** (`type: "beginsWith"`) through the compat facade; an
+  ExcelJS-idiomatic `{ type: "containsText", operator: "beginsWith" }` call is accepted but silently
+  renders as a plain "contains" rule instead, since only `type` is read.
+- **`removeConditionalFormatting`'s argument.** ExcelJS accepts an index, a predicate function, or no
+  argument (clear all); the core model's `removeConditionalFormatting(ref)` removes by exact `ref`
+  string match instead. An ExcelJS-style call (`removeConditionalFormatting(0)`,
+  `removeConditionalFormatting(rule => …)`) is accepted (it isn't in the deferred/throwing list) but
+  silently removes nothing, since no `ref` will ever equal a number or a function. Call it with the
+  block's `ref` string instead.
 
 ## Supported / deferred matrix
 
@@ -65,7 +84,7 @@ never the core's field merge. Again, this is scoped to compat-constructed workbo
 | `workbook.csv.*` | ❌ deferred | throws `UnsupportedFeatureError` |
 | `addImage`/`getImage`/`workbook.media`/`worksheet.addImage` | ❌ deferred | throws `UnsupportedFeatureError` |
 | `worksheet.addTable`/`getTable(s)` (tables, pivot tables) | ❌ deferred | throws `UnsupportedFeatureError` |
-| `worksheet.addConditionalFormatting`/`removeConditionalFormatting` | ❌ deferred | throws `UnsupportedFeatureError` |
+| `worksheet.addConditionalFormatting`/`removeConditionalFormatting`, `worksheet.conditionalFormattings` | ✅ | `cellIs`, `expression`, the text-contains family, `top10`, `aboveAverage`/`belowAverage`, `duplicateValues`/`uniqueValues`, `colorScale`, `dataBar`, `iconSet`. `colorScale`/`dataBar` colours are bridged bidirectionally between ExcelJS's `{argb}` objects and the core's bare-ARGB-string `CfColor` — see D3 below. Deferred: x14 dataBar gradient/axis/negative-fill extensions, `timePeriod` rules, custom `iconSet` icons. |
 | `cell.note` (comments) | ❌ deferred | throws `UnsupportedFeatureError` |
 | `workbook.definedNames.*` | ❌ deferred | throws `UnsupportedFeatureError` |
 | `worksheet.protect`/`unprotect` | ❌ deferred | throws `UnsupportedFeatureError` |

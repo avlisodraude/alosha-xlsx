@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   CellType,
   InvalidCellValueError,
+  InvalidConditionalFormattingError,
   InvalidPackageError,
   readWorkbookBuffer,
   Workbook,
@@ -250,6 +251,173 @@ describe("read round-trip — panes & auto-filter", () => {
   });
 });
 
+describe("read round-trip — conditional formatting", () => {
+  it("persists one rule per family, preserving ref, priority order and every type-specific field", () => {
+    const wb = new Workbook();
+    const ws = wb.addWorksheet("CF");
+    ws.addConditionalFormatting({
+      ref: "A1:A10",
+      rules: [
+        { type: "cellIs", operator: "greaterThan", formulae: [5] },
+        { type: "cellIs", operator: "between", formulae: [1, 10] },
+        { type: "expression", formulae: ["$A1>0"] },
+        { type: "containsText", text: "foo" },
+        { type: "notContainsText", text: "bar" },
+        { type: "beginsWith", text: "Q" },
+        { type: "endsWith", text: "Z" },
+        { type: "top10", rank: 10, percent: true, bottom: true },
+        { type: "aboveAverage" },
+        { type: "belowAverage" },
+        { type: "duplicateValues" },
+        { type: "uniqueValues" },
+      ],
+    });
+    ws.addConditionalFormatting({
+      ref: "C1:C20",
+      rules: [
+        {
+          type: "colorScale",
+          cfvo: [{ type: "min" }, { type: "max" }],
+          color: ["FFF8696B", "FF63BE7B"],
+        },
+      ],
+    });
+    ws.addConditionalFormatting({
+      ref: "D1:D20",
+      rules: [
+        {
+          type: "dataBar",
+          cfvo: [{ type: "min" }, { type: "max" }],
+          color: "FF638EC6",
+        },
+      ],
+    });
+    ws.addConditionalFormatting({
+      ref: "E1:E20",
+      rules: [
+        {
+          type: "iconSet",
+          iconSet: "3TrafficLights1",
+          cfvo: [
+            { type: "percent", value: 0 },
+            { type: "percent", value: 33 },
+            { type: "percent", value: 67 },
+          ],
+        },
+      ],
+    });
+
+    const back = readWorkbookBuffer(writeWorkbookBuffer(wb));
+    const data = back.getWorksheet("CF");
+    if (!data) throw new Error("CF sheet missing");
+
+    expect(data.conditionalFormattings.map((cf) => cf.ref)).toEqual([
+      "A1:A10",
+      "C1:C20",
+      "D1:D20",
+      "E1:E20",
+    ]);
+
+    const firstBlockRules = data.conditionalFormattings[0]?.rules ?? [];
+    // Priorities are assigned in a single workbook-monotonic sequence across every block, so the
+    // first block's rules land on 1..12 (increasing, in the order they were added) and the second
+    // block's colorScale continues from 13, etc.
+    expect(firstBlockRules.map((r) => r.priority)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    expect(firstBlockRules.map(({ priority: _priority, ...rest }) => rest)).toEqual([
+      { type: "cellIs", operator: "greaterThan", formulae: [5] },
+      { type: "cellIs", operator: "between", formulae: [1, 10] },
+      { type: "expression", formulae: ["$A1>0"] },
+      { type: "containsText", text: "foo" },
+      { type: "notContainsText", text: "bar" },
+      { type: "beginsWith", text: "Q" },
+      { type: "endsWith", text: "Z" },
+      { type: "top10", rank: 10, percent: true, bottom: true },
+      { type: "aboveAverage" },
+      { type: "belowAverage" },
+      { type: "duplicateValues" },
+      { type: "uniqueValues" },
+    ]);
+
+    expect(data.conditionalFormattings[1]?.rules).toEqual([
+      {
+        type: "colorScale",
+        cfvo: [{ type: "min" }, { type: "max" }],
+        color: ["FFF8696B", "FF63BE7B"],
+        priority: 13,
+      },
+    ]);
+    expect(data.conditionalFormattings[2]?.rules).toEqual([
+      {
+        type: "dataBar",
+        cfvo: [{ type: "min" }, { type: "max" }],
+        color: "FF638EC6",
+        priority: 14,
+      },
+    ]);
+    expect(data.conditionalFormattings[3]?.rules).toEqual([
+      {
+        type: "iconSet",
+        iconSet: "3TrafficLights1",
+        cfvo: [
+          { type: "percent", value: 0 },
+          { type: "percent", value: 33 },
+          { type: "percent", value: 67 },
+        ],
+        priority: 15,
+      },
+    ]);
+  });
+
+  it("resolves a dxf-bearing rule's style through the shared dxf pool", () => {
+    const wb = new Workbook();
+    const ws = wb.addWorksheet("Highlight");
+    ws.addConditionalFormatting({
+      ref: "B1:B10",
+      rules: [
+        {
+          type: "cellIs",
+          operator: "lessThan",
+          formulae: [0],
+          style: { fill: { type: "pattern", pattern: "solid", bgColor: { argb: "FFFF0000" } } },
+        },
+      ],
+    });
+
+    const back = readWorkbookBuffer(writeWorkbookBuffer(wb));
+    const data = back.getWorksheet("Highlight");
+    if (!data) throw new Error("Highlight sheet missing");
+
+    expect(data.conditionalFormattings[0]?.rules[0]).toEqual({
+      type: "cellIs",
+      operator: "lessThan",
+      formulae: [0],
+      priority: 1,
+      style: { fill: { type: "pattern", pattern: "solid", bgColor: { argb: "FFFF0000" } } },
+    });
+  });
+
+  it("preserves explicit priorities set on the model", () => {
+    const wb = new Workbook();
+    const ws = wb.addWorksheet("Explicit");
+    ws.addConditionalFormatting({
+      ref: "A1:A5",
+      rules: [
+        { type: "duplicateValues", priority: 42 },
+        { type: "uniqueValues", priority: 7 },
+      ],
+    });
+
+    const back = readWorkbookBuffer(writeWorkbookBuffer(wb));
+    const data = back.getWorksheet("Explicit");
+    if (!data) throw new Error("Explicit sheet missing");
+
+    expect(data.conditionalFormattings[0]?.rules).toEqual([
+      { type: "duplicateValues", priority: 42 },
+      { type: "uniqueValues", priority: 7 },
+    ]);
+  });
+});
+
 describe("read path — typed errors", () => {
   it("throws InvalidPackageError on a truncated/corrupt zip", () => {
     expect(() => readWorkbookBuffer(new Uint8Array([1, 2, 3, 4, 5]))).toThrow(InvalidPackageError);
@@ -266,6 +434,22 @@ describe("read path — typed errors", () => {
       ),
     );
     expect(() => readWorkbookBuffer(writeZipArchive(entries))).toThrow(InvalidCellValueError);
+  });
+
+  it("throws a typed error for a malformed cfRule priority, never a silent NaN", () => {
+    const bytes = writeWorkbookBuffer(fixture());
+    const entries = readZipArchive(bytes);
+    entries.set(
+      "xl/worksheets/sheet1.xml",
+      new TextEncoder().encode(
+        `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/>` +
+          `<conditionalFormatting sqref="A1:A9">` +
+          `<cfRule type="duplicateValues" dxfId="0" priority="x"/></conditionalFormatting></worksheet>`,
+      ),
+    );
+    expect(() => readWorkbookBuffer(writeZipArchive(entries))).toThrow(
+      InvalidConditionalFormattingError,
+    );
   });
 });
 

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { InvalidPaneError, isAloshaXlsxError } from "../../../src/errors.js";
+import {
+  InvalidConditionalFormattingError,
+  InvalidPaneError,
+  isAloshaXlsxError,
+} from "../../../src/errors.js";
 import {
   CellType,
   type RichText,
@@ -22,13 +26,20 @@ function sheet(): Worksheet {
 }
 
 /** A StyleTable stub: `styleFor` returns whatever `styles[index]` holds (default {}); `isDateStyle`
- *  is true for the listed indices. Lets grid tests exercise date-vs-number without a real styles.xml. */
-function stubStyles(opts?: { dateIndices?: number[]; styles?: Record<number, Style> }): StyleTable {
+ *  is true for the listed indices; `dxfFor` returns whatever `dxfs[index]` holds (default {}). Lets
+ *  grid tests exercise date-vs-number without a real styles.xml. */
+function stubStyles(opts?: {
+  dateIndices?: number[];
+  styles?: Record<number, Style>;
+  dxfs?: Record<number, Style>;
+}): StyleTable {
   const dates = new Set(opts?.dateIndices ?? []);
   const map = opts?.styles ?? {};
+  const dxfMap = opts?.dxfs ?? {};
   return {
     styleFor: (i) => map[i] ?? {},
     isDateStyle: (i) => dates.has(i),
+    dxfFor: (i) => dxfMap[i] ?? {},
   };
 }
 
@@ -520,6 +531,376 @@ describe("parseWorksheet — hyperlinks", () => {
     );
 
     expect(s.getCell("A1").value).toBe("Plain");
+  });
+});
+
+// --- <conditionalFormatting> reconstruction (CONDITIONAL-FORMATTING-SPEC §3) --------------------------
+
+describe("parseWorksheet — conditional formatting", () => {
+  it("inverts cellIs with one formula (golden)", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<conditionalFormatting sqref="A1:A10">` +
+          `<cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan">` +
+          `<formula>5</formula></cfRule></conditionalFormatting>`,
+      ),
+      ctx(),
+    );
+    expect(s.conditionalFormattings).toEqual([
+      {
+        ref: "A1:A10",
+        rules: [{ type: "cellIs", operator: "greaterThan", formulae: [5], priority: 1 }],
+      },
+    ]);
+  });
+
+  it("inverts cellIs between into two formulae (golden)", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<conditionalFormatting sqref="B1:B5">` +
+          `<cfRule type="cellIs" dxfId="0" priority="3" operator="between">` +
+          `<formula>1</formula><formula>10</formula></cfRule></conditionalFormatting>`,
+      ),
+      ctx(),
+    );
+    expect(s.conditionalFormattings[0]?.rules).toEqual([
+      { type: "cellIs", operator: "between", formulae: [1, 10], priority: 3 },
+    ]);
+  });
+
+  it("keeps a non-numeric cellIs formula as a string (a cell ref or quoted text)", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<conditionalFormatting sqref="A1"><cfRule type="cellIs" dxfId="0" priority="1" operator="equal">` +
+          `<formula>$B$1</formula></cfRule></conditionalFormatting>`,
+      ),
+      ctx(),
+    );
+    expect(s.conditionalFormattings[0]?.rules[0]).toMatchObject({ formulae: ["$B$1"] });
+  });
+
+  it("inverts expression (golden)", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<conditionalFormatting sqref="A1:A3">` +
+          `<cfRule type="expression" dxfId="0" priority="2"><formula>$A1&gt;0</formula></cfRule>` +
+          `</conditionalFormatting>`,
+      ),
+      ctx(),
+    );
+    expect(s.conditionalFormattings[0]?.rules).toEqual([
+      { type: "expression", formulae: ["$A1>0"], priority: 2 },
+    ]);
+  });
+
+  it("inverts containsText: reads text off the attribute, discards the derived formula (golden)", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<conditionalFormatting sqref="C2:C20">` +
+          `<cfRule type="containsText" dxfId="0" priority="4" operator="containsText" text="foo">` +
+          `<formula>NOT(ISERROR(SEARCH("foo",C2)))</formula></cfRule></conditionalFormatting>`,
+      ),
+      ctx(),
+    );
+    expect(s.conditionalFormattings[0]?.rules).toEqual([
+      { type: "containsText", text: "foo", priority: 4 },
+    ]);
+  });
+
+  it("inverts notContainsText / beginsWith / endsWith by their type attribute (golden)", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<conditionalFormatting sqref="A1">` +
+          `<cfRule type="notContainsText" dxfId="0" priority="1" operator="notContains" text="bar">` +
+          `<formula>ISERROR(SEARCH("bar",A1))</formula></cfRule>` +
+          `<cfRule type="beginsWith" dxfId="0" priority="2" operator="beginsWith" text="Q">` +
+          `<formula>LEFT(A1,LEN("Q"))="Q"</formula></cfRule>` +
+          `<cfRule type="endsWith" dxfId="0" priority="3" operator="endsWith" text="Z">` +
+          `<formula>RIGHT(A1,LEN("Z"))="Z"</formula></cfRule>` +
+          `</conditionalFormatting>`,
+      ),
+      ctx(),
+    );
+    expect(s.conditionalFormattings[0]?.rules).toEqual([
+      { type: "notContainsText", text: "bar", priority: 1 },
+      { type: "beginsWith", text: "Q", priority: 2 },
+      { type: "endsWith", text: "Z", priority: 3 },
+    ]);
+  });
+
+  it("inverts top10, with percent/bottom only when the attribute is present (golden)", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<conditionalFormatting sqref="A1:A100">` +
+          `<cfRule type="top10" dxfId="0" priority="4" percent="1" bottom="1" rank="10"/>` +
+          `</conditionalFormatting>`,
+      ),
+      ctx(),
+    );
+    expect(s.conditionalFormattings[0]?.rules).toEqual([
+      { type: "top10", rank: 10, percent: true, bottom: true, priority: 4 },
+    ]);
+  });
+
+  it("top10 omits percent/bottom when the attributes are absent", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<conditionalFormatting sqref="A1:A100">` +
+          `<cfRule type="top10" dxfId="0" priority="1" rank="5"/></conditionalFormatting>`,
+      ),
+      ctx(),
+    );
+    const rule = s.conditionalFormattings[0]?.rules[0];
+    expect(rule).toEqual({ type: "top10", rank: 5, priority: 1 });
+    expect(rule).not.toHaveProperty("percent");
+    expect(rule).not.toHaveProperty("bottom");
+  });
+
+  it("inverts aboveAverage / belowAverage via the aboveAverage=0 flag (golden)", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<conditionalFormatting sqref="A1:A9">` +
+          `<cfRule type="aboveAverage" dxfId="0" priority="5"/>` +
+          `<cfRule type="aboveAverage" dxfId="0" priority="6" aboveAverage="0"/>` +
+          `</conditionalFormatting>`,
+      ),
+      ctx(),
+    );
+    expect(s.conditionalFormattings[0]?.rules).toEqual([
+      { type: "aboveAverage", priority: 5 },
+      { type: "belowAverage", priority: 6 },
+    ]);
+  });
+
+  it("inverts duplicateValues / uniqueValues (golden)", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<conditionalFormatting sqref="A1:A9">` +
+          `<cfRule type="duplicateValues" dxfId="0" priority="6"/>` +
+          `<cfRule type="uniqueValues" dxfId="0" priority="7"/>` +
+          `</conditionalFormatting>`,
+      ),
+      ctx(),
+    );
+    expect(s.conditionalFormattings[0]?.rules).toEqual([
+      { type: "duplicateValues", priority: 6 },
+      { type: "uniqueValues", priority: 7 },
+    ]);
+  });
+
+  it("inverts colorScale with no dxfId (golden)", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<conditionalFormatting sqref="C1:C20"><cfRule type="colorScale" priority="7"><colorScale>` +
+          `<cfvo type="min"/><cfvo type="max"/>` +
+          `<color rgb="FFF8696B"/><color rgb="FF63BE7B"/>` +
+          `</colorScale></cfRule></conditionalFormatting>`,
+      ),
+      ctx(),
+    );
+    expect(s.conditionalFormattings[0]?.rules).toEqual([
+      {
+        type: "colorScale",
+        cfvo: [{ type: "min" }, { type: "max" }],
+        color: ["FFF8696B", "FF63BE7B"],
+        priority: 7,
+      },
+    ]);
+  });
+
+  it("inverts dataBar (golden)", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<conditionalFormatting sqref="D1:D20"><cfRule type="dataBar" priority="8"><dataBar>` +
+          `<cfvo type="min"/><cfvo type="max"/><color rgb="FF638EC6"/>` +
+          `</dataBar></cfRule></conditionalFormatting>`,
+      ),
+      ctx(),
+    );
+    expect(s.conditionalFormattings[0]?.rules).toEqual([
+      {
+        type: "dataBar",
+        cfvo: [{ type: "min" }, { type: "max" }],
+        color: "FF638EC6",
+        priority: 8,
+      },
+    ]);
+  });
+
+  it("inverts iconSet including percent cfvo vals (golden)", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<conditionalFormatting sqref="E1:E20">` +
+          `<cfRule type="iconSet" priority="9"><iconSet iconSet="3TrafficLights1">` +
+          `<cfvo type="percent" val="0"/><cfvo type="percent" val="33"/><cfvo type="percent" val="67"/>` +
+          `</iconSet></cfRule></conditionalFormatting>`,
+      ),
+      ctx(),
+    );
+    expect(s.conditionalFormattings[0]?.rules).toEqual([
+      {
+        type: "iconSet",
+        iconSet: "3TrafficLights1",
+        cfvo: [
+          { type: "percent", value: 0 },
+          { type: "percent", value: 33 },
+          { type: "percent", value: 67 },
+        ],
+        priority: 9,
+      },
+    ]);
+  });
+
+  it("resolves dxfId into rule.style, including a bgColor fill highlight", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<conditionalFormatting sqref="A1:A10">` +
+          `<cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan">` +
+          `<formula>5</formula></cfRule></conditionalFormatting>`,
+      ),
+      ctx({
+        styles: stubStyles({
+          dxfs: {
+            0: { fill: { type: "pattern", pattern: "solid", bgColor: { argb: "FFF8696B" } } },
+          },
+        }),
+      }),
+    );
+    expect(s.conditionalFormattings[0]?.rules[0]).toEqual({
+      type: "cellIs",
+      operator: "greaterThan",
+      formulae: [5],
+      priority: 1,
+      style: { fill: { type: "pattern", pattern: "solid", bgColor: { argb: "FFF8696B" } } },
+    });
+  });
+
+  it("leaves style unset when dxfId resolves to an empty differential style", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<conditionalFormatting sqref="A1:A10">` +
+          `<cfRule type="duplicateValues" dxfId="0" priority="1"/></conditionalFormatting>`,
+      ),
+      ctx(),
+    );
+    expect(s.conditionalFormattings[0]?.rules[0]).not.toHaveProperty("style");
+  });
+
+  it("registers several sibling <conditionalFormatting> blocks (no outer wrapper)", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<conditionalFormatting sqref="A1:A9"><cfRule type="duplicateValues" dxfId="0" priority="1"/></conditionalFormatting>` +
+          `<conditionalFormatting sqref="C1:C9"><cfRule type="uniqueValues" dxfId="0" priority="2"/></conditionalFormatting>`,
+      ),
+      ctx(),
+    );
+    expect(s.conditionalFormattings.map((cf) => cf.ref)).toEqual(["A1:A9", "C1:C9"]);
+  });
+
+  it("skips a block missing sqref, never throwing", () => {
+    const s = sheet();
+    expect(() =>
+      parseWorksheet(
+        s,
+        ws(
+          `<conditionalFormatting><cfRule type="duplicateValues" dxfId="0" priority="1"/></conditionalFormatting>`,
+        ),
+        ctx(),
+      ),
+    ).not.toThrow();
+    expect(s.conditionalFormattings).toEqual([]);
+  });
+
+  it("skips an individual cfRule with an unrecognized type, keeping its siblings", () => {
+    const s = sheet();
+    expect(() =>
+      parseWorksheet(
+        s,
+        ws(
+          `<conditionalFormatting sqref="A1:A9">` +
+            `<cfRule type="timePeriod" dxfId="0" priority="1"/>` +
+            `<cfRule type="duplicateValues" dxfId="0" priority="2"/>` +
+            `</conditionalFormatting>`,
+        ),
+        ctx(),
+      ),
+    ).not.toThrow();
+    expect(s.conditionalFormattings[0]?.rules).toEqual([{ type: "duplicateValues", priority: 2 }]);
+  });
+
+  it("throws InvalidConditionalFormattingError for a non-numeric priority, never a silent NaN", () => {
+    const s = sheet();
+    expect(() =>
+      parseWorksheet(
+        s,
+        ws(
+          `<conditionalFormatting sqref="A1:A9">` +
+            `<cfRule type="duplicateValues" dxfId="0" priority="x"/></conditionalFormatting>`,
+        ),
+        ctx(),
+      ),
+    ).toThrow(InvalidConditionalFormattingError);
+  });
+
+  it("throws InvalidConditionalFormattingError for a non-numeric rank, never a silent NaN", () => {
+    const s = sheet();
+    expect(() =>
+      parseWorksheet(
+        s,
+        ws(
+          `<conditionalFormatting sqref="A1:A9">` +
+            `<cfRule type="top10" dxfId="0" priority="1" rank="x"/></conditionalFormatting>`,
+        ),
+        ctx(),
+      ),
+    ).toThrow(InvalidConditionalFormattingError);
+  });
+
+  it("skips the whole sheet's conditional formatting when the sqref fails Range validation", () => {
+    const s = sheet();
+    expect(() =>
+      parseWorksheet(
+        s,
+        ws(
+          `<conditionalFormatting sqref="@@@">` +
+            `<cfRule type="duplicateValues" dxfId="0" priority="1"/></conditionalFormatting>`,
+        ),
+        ctx(),
+      ),
+    ).not.toThrow();
+    expect(s.conditionalFormattings).toEqual([]);
   });
 });
 

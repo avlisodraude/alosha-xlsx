@@ -18,6 +18,14 @@ function dateStyleOf(numFmt: string): boolean {
   return parseStyles(builder.toXml()).isDateStyle(id);
 }
 
+/** Add a single differential Style through the dxf writer, serialize, parse it back, and return the
+ *  reconstructed Style for that dxf id. The tightest possible inverse check for one dxf. */
+function dxfRoundTrip(style: Partial<Style> | undefined): Style {
+  const builder = createStyles();
+  const id = builder.addDxf(style);
+  return parseStyles(builder.toXml()).dxfFor(id);
+}
+
 describe("parseStyles — defaults & missing part", () => {
   it("treats a missing styles part as all-default", () => {
     const table = parseStyles(undefined);
@@ -225,6 +233,81 @@ describe("isDateFormatCode", () => {
     expect(isDateFormatCode("0.00E+00")).toBe(false);
     expect(isDateFormatCode("General")).toBe(false);
     expect(isDateFormatCode("@")).toBe(false);
+  });
+});
+
+describe("parseStyles — dxf pool (conditional formatting)", () => {
+  it("treats a missing <dxfs> (or an empty count=0) as an empty table", () => {
+    const table = parseStyles(undefined);
+    expect(table.dxfFor(0)).toEqual({});
+
+    const empty = parseStyles(createStyles().toXml());
+    expect(empty.dxfFor(0)).toEqual({});
+  });
+
+  it("returns {} for an out-of-range dxf index", () => {
+    const builder = createStyles();
+    builder.addDxf({ font: { bold: true } });
+    const table = parseStyles(builder.toXml());
+    expect(table.dxfFor(-1)).toEqual({});
+    expect(table.dxfFor(1.5)).toEqual({});
+    expect(table.dxfFor(999)).toEqual({});
+  });
+
+  it("restores a solid-fill highlight from <patternFill><bgColor> (not fgColor)", () => {
+    const style: Partial<Style> = {
+      fill: { type: "pattern", pattern: "solid", bgColor: { argb: "FFF8696B" } },
+    };
+    expect(dxfRoundTrip(style)).toEqual(style);
+  });
+
+  it("restores a non-solid pattern's patternType alongside its colour", () => {
+    const style: Partial<Style> = {
+      fill: { type: "pattern", pattern: "lightGrid", bgColor: { argb: "FF00FF00" } },
+    };
+    expect(dxfRoundTrip(style)).toEqual(style);
+  });
+
+  it("restores a bold/italic font and a border", () => {
+    const style: Partial<Style> = {
+      font: { bold: true, italic: true, color: { argb: "FF000000" } },
+      border: { top: { style: "thin", color: { argb: "FF000000" } } },
+    };
+    expect(dxfRoundTrip(style)).toEqual(style);
+  });
+
+  it("restores a numFmt by its formatCode", () => {
+    expect(dxfRoundTrip({ numFmt: "0.00%" })).toEqual({ numFmt: "0.00%" });
+    expect(dxfRoundTrip({ numFmt: '"€"#,##0.00' })).toEqual({ numFmt: '"€"#,##0.00' });
+  });
+
+  it("restores alignment and protection", () => {
+    const style: Partial<Style> = {
+      alignment: { horizontal: "center", wrapText: true },
+      protection: { locked: false },
+    };
+    expect(dxfRoundTrip(style)).toEqual(style);
+  });
+
+  it("round-trips an empty/undefined dxf as {}", () => {
+    expect(dxfRoundTrip(undefined)).toEqual({});
+    expect(dxfRoundTrip({})).toEqual({});
+  });
+
+  it("dedups identical dxfs to the same id, distinct ones to different ids", () => {
+    const builder = createStyles();
+    const highlight: Partial<Style> = {
+      fill: { type: "pattern", pattern: "solid", bgColor: { argb: "FFF8696B" } },
+    };
+    const id1 = builder.addDxf(highlight);
+    const id2 = builder.addDxf({ ...highlight });
+    const id3 = builder.addDxf({ font: { bold: true } });
+    expect(id1).toBe(id2);
+    expect(id3).not.toBe(id1);
+
+    const table = parseStyles(builder.toXml());
+    expect(table.dxfFor(id1)).toEqual(highlight);
+    expect(table.dxfFor(id3)).toEqual({ font: { bold: true } });
   });
 });
 

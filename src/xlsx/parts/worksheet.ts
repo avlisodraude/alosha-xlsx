@@ -9,7 +9,14 @@
 //   hyperlink-> its display text as a string            formula -> <f>expr</f> + typed cached <v>
 //   merge-slave / styled-empty -> empty <c> carrying only its style   null (no style) -> skipped
 
-import type { CellModel, DataValidationModel, WorksheetView } from "../../model/index.js";
+import { Range } from "../../address/index.js";
+import type {
+  CellModel,
+  ConditionalFormatting,
+  ConditionalRule,
+  DataValidationModel,
+  WorksheetView,
+} from "../../model/index.js";
 import {
   CellType,
   DATA_VALIDATION_OPERATOR_TYPES,
@@ -29,6 +36,10 @@ export interface WorksheetContext {
   sharedStrings: SharedStrings;
   useSharedStrings: boolean;
   date1904: boolean;
+  /** Workbook-monotonic allocator for cfRule priorities with no explicit value. Supplied by the
+   *  workbook writer so priorities stay unique across sheets; a per-render fallback covers isolated
+   *  part tests that construct a context without it. */
+  nextPriority?: () => number;
 }
 
 /** The rendered worksheet plus its `.rels` doc, if the sheet has any relationships (hyperlinks). */
@@ -70,6 +81,8 @@ export function renderWorksheet(ws: Worksheet, ctx: WorksheetContext): RenderedW
   // `<dataValidations>` after `<mergeCells>`, `<hyperlinks>` after that.
   renderAutoFilter(w, model.autoFilter);
   renderMergeCells(w, model.merges);
+  // CT_Worksheet order: `<conditionalFormatting>` sits between `<mergeCells>` and `<dataValidations>`.
+  renderConditionalFormatting(w, model.conditionalFormattings, ctx);
   renderDataValidations(w, model.dataValidations);
   const rels = renderHyperlinks(w, hyperlinks);
 
@@ -299,6 +312,173 @@ function renderMergeCells(w: XmlWriter, merges: string[]): void {
   w.open("mergeCells", { count: merges.length });
   for (const ref of merges) w.leaf("mergeCell", { ref });
   w.close("mergeCells");
+}
+
+/** Maps a text-family rule `type` to its `<cfRule operator>` (the operator vocabulary differs from the
+ *  type: `notContainsText` uses operator `notContains`). */
+const CF_TEXT_OPERATOR: Record<
+  "containsText" | "notContainsText" | "beginsWith" | "endsWith",
+  string
+> = {
+  containsText: "containsText",
+  notContainsText: "notContains",
+  beginsWith: "beginsWith",
+  endsWith: "endsWith",
+};
+
+/** Emit the `<conditionalFormatting>` blocks (CT_Worksheet: after `<mergeCells>`, before
+ *  `<dataValidations>`). One `<conditionalFormatting sqref>` per block, then its `<cfRule>`s. Rules
+ *  with no explicit `priority` draw a workbook-monotonic one; dxf-bearing rules intern their `style`
+ *  into the shared `<dxfs>` pool. See docs/CONDITIONAL-FORMATTING-SPEC.md §2b. */
+function renderConditionalFormatting(
+  w: XmlWriter,
+  cfs: ConditionalFormatting[] | undefined,
+  ctx: WorksheetContext,
+): void {
+  if (!cfs || cfs.length === 0) return;
+
+  let local = 0;
+  const nextPriority = ctx.nextPriority ?? (() => ++local);
+
+  for (const cf of cfs) {
+    // The text-family formulae anchor on the top-left cell of the ref (Excel's convention).
+    const anchor = new Range(cf.ref.trim().split(/\s+/)[0] ?? cf.ref).tl;
+    w.open("conditionalFormatting", { sqref: cf.ref });
+    for (const rule of cf.rules) renderCfRule(w, rule, anchor, ctx, nextPriority);
+    w.close("conditionalFormatting");
+  }
+}
+
+/** Render a single `<cfRule>`. Self-visualising rules (colorScale/dataBar/iconSet) carry no `dxfId`;
+ *  every other rule interns its optional differential `style` and references the resulting `dxfId`. */
+function renderCfRule(
+  w: XmlWriter,
+  rule: ConditionalRule,
+  anchor: string,
+  ctx: WorksheetContext,
+  nextPriority: () => number,
+): void {
+  const priority = rule.priority ?? nextPriority();
+  const stopIfTrue = rule.stopIfTrue ? true : undefined;
+
+  switch (rule.type) {
+    case "cellIs": {
+      const dxfId = ctx.styles.addDxf(rule.style);
+      w.open("cfRule", { type: "cellIs", dxfId, priority, operator: rule.operator, stopIfTrue });
+      for (const f of rule.formulae) w.el("formula", String(f));
+      w.close("cfRule");
+      break;
+    }
+    case "expression": {
+      const dxfId = ctx.styles.addDxf(rule.style);
+      w.open("cfRule", { type: "expression", dxfId, priority, stopIfTrue });
+      w.el("formula", String(rule.formulae[0]));
+      w.close("cfRule");
+      break;
+    }
+    case "containsText":
+    case "notContainsText":
+    case "beginsWith":
+    case "endsWith": {
+      const dxfId = ctx.styles.addDxf(rule.style);
+      w.open("cfRule", {
+        type: rule.type,
+        dxfId,
+        priority,
+        operator: CF_TEXT_OPERATOR[rule.type],
+        text: rule.text,
+        stopIfTrue,
+      });
+      w.el("formula", textRuleFormula(rule.type, rule.text, anchor));
+      w.close("cfRule");
+      break;
+    }
+    case "top10": {
+      const dxfId = ctx.styles.addDxf(rule.style);
+      w.leaf("cfRule", {
+        type: "top10",
+        dxfId,
+        priority,
+        percent: rule.percent ? true : undefined,
+        bottom: rule.bottom ? true : undefined,
+        rank: rule.rank,
+        stopIfTrue,
+      });
+      break;
+    }
+    case "aboveAverage":
+    case "belowAverage": {
+      const dxfId = ctx.styles.addDxf(rule.style);
+      w.leaf("cfRule", {
+        type: "aboveAverage",
+        dxfId,
+        priority,
+        // `belowAverage` is the same OOXML type with `aboveAverage="0"`.
+        aboveAverage: rule.type === "belowAverage" ? false : undefined,
+        stopIfTrue,
+      });
+      break;
+    }
+    case "duplicateValues":
+    case "uniqueValues": {
+      const dxfId = ctx.styles.addDxf(rule.style);
+      w.leaf("cfRule", { type: rule.type, dxfId, priority, stopIfTrue });
+      break;
+    }
+    case "colorScale": {
+      w.open("cfRule", { type: "colorScale", priority, stopIfTrue });
+      w.open("colorScale");
+      for (const cfvo of rule.cfvo) renderCfvo(w, cfvo);
+      for (const color of rule.color) w.leaf("color", { rgb: color });
+      w.close("colorScale");
+      w.close("cfRule");
+      break;
+    }
+    case "dataBar": {
+      w.open("cfRule", { type: "dataBar", priority, stopIfTrue });
+      w.open("dataBar");
+      for (const cfvo of rule.cfvo) renderCfvo(w, cfvo);
+      w.leaf("color", { rgb: rule.color });
+      w.close("dataBar");
+      w.close("cfRule");
+      break;
+    }
+    case "iconSet": {
+      w.open("cfRule", { type: "iconSet", priority, stopIfTrue });
+      w.open("iconSet", { iconSet: rule.iconSet });
+      for (const cfvo of rule.cfvo) renderCfvo(w, cfvo);
+      w.close("iconSet");
+      w.close("cfRule");
+      break;
+    }
+  }
+}
+
+/** A `<cfvo>`: the `val` attribute is omitted for `min`/`max` (which have no threshold value). */
+function renderCfvo(w: XmlWriter, cfvo: { type: string; value?: number | string }): void {
+  const val =
+    cfvo.type === "min" || cfvo.type === "max" || cfvo.value === undefined
+      ? undefined
+      : String(cfvo.value);
+  w.leaf("cfvo", { type: cfvo.type, val });
+}
+
+/** The Excel-generated `<formula>` backing a text-family rule, anchored on the ref's top-left cell. */
+function textRuleFormula(
+  type: "containsText" | "notContainsText" | "beginsWith" | "endsWith",
+  text: string,
+  anchor: string,
+): string {
+  switch (type) {
+    case "containsText":
+      return `NOT(ISERROR(SEARCH("${text}",${anchor})))`;
+    case "notContainsText":
+      return `ISERROR(SEARCH("${text}",${anchor}))`;
+    case "beginsWith":
+      return `LEFT(${anchor},LEN("${text}"))="${text}"`;
+    case "endsWith":
+      return `RIGHT(${anchor},LEN("${text}"))="${text}"`;
+  }
 }
 
 /** Emit the `<dataValidations>` block (dropdowns + value constraints). Lives entirely in the sheet —
