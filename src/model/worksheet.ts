@@ -39,11 +39,17 @@ export interface WorksheetProperties {
   [key: string]: unknown;
 }
 
-/** Freeze/split panes, zoom, gridlines — stored as plain data (round-trips through the model). */
+/** Freeze/split panes, zoom, gridlines — stored as plain data (round-trips through the model).
+ *  `xSplit`/`ySplit`/`topLeftCell`/`activePane` back the `<pane>` child emitted when `state` is
+ *  `"frozen"` or `"split"` (CT_Pane in the OOXML schema). */
 export interface WorksheetView {
   state?: "normal" | "frozen" | "split";
   showGridLines?: boolean;
   zoomScale?: number;
+  xSplit?: number;
+  ySplit?: number;
+  topLeftCell?: string;
+  activePane?: "bottomRight" | "topRight" | "bottomLeft" | "topLeft";
   [key: string]: unknown;
 }
 
@@ -73,6 +79,8 @@ export interface WorksheetModel {
   rows: RowModel[];
   merges: string[];
   dataValidations?: DataValidationModel[];
+  /** `<autoFilter ref="…">`, an A1 range like `"A1:D1"`. */
+  autoFilter?: string;
   pageSetup?: unknown;
   headerFooter?: unknown;
 }
@@ -130,6 +138,8 @@ export class Worksheet implements WorksheetHost {
   readonly workbook: Workbook;
   properties: WorksheetProperties;
   views: WorksheetView[] = [];
+  /** `<autoFilter ref="…">`, an A1 range like `"A1:D1"`. */
+  autoFilter?: string;
   pageSetup?: unknown;
   headerFooter?: unknown;
 
@@ -573,6 +583,7 @@ export class Worksheet implements WorksheetHost {
     };
     if (columns) m.columns = columns;
     if (this._dataValidations.size > 0) m.dataValidations = this._dataValidations.model;
+    if (this.autoFilter !== undefined) m.autoFilter = this.autoFilter;
     if (this.pageSetup !== undefined) m.pageSetup = this.pageSetup;
     if (this.headerFooter !== undefined) m.headerFooter = this.headerFooter;
     return m;
@@ -585,6 +596,7 @@ export class Worksheet implements WorksheetHost {
     this.state = m.state;
     this.properties = { ...m.properties };
     this.views = m.views.map((v) => ({ ...v }));
+    this.autoFilter = m.autoFilter;
     this.pageSetup = m.pageSetup;
     this.headerFooter = m.headerFooter;
 

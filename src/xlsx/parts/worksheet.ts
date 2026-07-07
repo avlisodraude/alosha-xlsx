@@ -9,7 +9,7 @@
 //   hyperlink-> its display text as a string            formula -> <f>expr</f> + typed cached <v>
 //   merge-slave / styled-empty -> empty <c> carrying only its style   null (no style) -> skipped
 
-import type { CellModel, DataValidationModel } from "../../model/index.js";
+import type { CellModel, DataValidationModel, WorksheetView } from "../../model/index.js";
 import {
   CellType,
   DATA_VALIDATION_OPERATOR_TYPES,
@@ -56,12 +56,7 @@ export function renderWorksheet(ws: Worksheet, ctx: WorksheetContext): RenderedW
 
   w.leaf("dimension", { ref: ws.dimensions.range });
 
-  w.open("sheetViews");
-  w.leaf("sheetView", {
-    workbookViewId: 0,
-    showGridLines: model.properties.showGridLines === false ? false : undefined,
-  });
-  w.close("sheetViews");
+  renderSheetViews(w, model.views, model.properties.showGridLines);
 
   w.leaf("sheetFormatPr", {
     defaultRowHeight: model.properties.defaultRowHeight ?? 15,
@@ -71,13 +66,49 @@ export function renderWorksheet(ws: Worksheet, ctx: WorksheetContext): RenderedW
   const hyperlinks: HyperlinkRecord[] = [];
   renderCols(w, model.columns, ctx);
   renderSheetData(w, model.rows, ctx, hyperlinks);
+  // CT_Worksheet order: `<autoFilter>` sits after `<sheetData>`, before `<mergeCells>`;
+  // `<dataValidations>` after `<mergeCells>`, `<hyperlinks>` after that.
+  renderAutoFilter(w, model.autoFilter);
   renderMergeCells(w, model.merges);
-  // CT_Worksheet order: `<dataValidations>` sits after `<mergeCells>`, `<hyperlinks>` after that.
   renderDataValidations(w, model.dataValidations);
   const rels = renderHyperlinks(w, hyperlinks);
 
   w.close("worksheet");
   return { xml: w.toString(), rels };
+}
+
+/** Emit `<sheetViews><sheetView>…</sheetView></sheetViews>`, adding a `<pane>` child when the first
+ *  view is frozen/split (CT_Pane). Only the first view backs the sheet's single `<sheetView>` — this
+ *  mirrors Excel, which stores one view per sheet in practice. */
+function renderSheetViews(
+  w: XmlWriter,
+  views: WorksheetView[],
+  showGridLinesProp: boolean | undefined,
+): void {
+  const view = views[0];
+  const showGridLines = showGridLinesProp === false ? false : undefined;
+
+  w.open("sheetViews");
+  if (view && (view.state === "frozen" || view.state === "split")) {
+    w.open("sheetView", { workbookViewId: 0, showGridLines });
+    w.leaf("pane", {
+      xSplit: view.xSplit,
+      ySplit: view.ySplit,
+      topLeftCell: view.topLeftCell,
+      activePane: view.activePane,
+      state: view.state,
+    });
+    w.close("sheetView");
+  } else {
+    w.leaf("sheetView", { workbookViewId: 0, showGridLines });
+  }
+  w.close("sheetViews");
+}
+
+/** Emit `<autoFilter ref="…">` (CT_Worksheet: after `<sheetData>`, before `<mergeCells>`). */
+function renderAutoFilter(w: XmlWriter, autoFilter: string | undefined): void {
+  if (!autoFilter) return;
+  w.leaf("autoFilter", { ref: autoFilter });
 }
 
 function renderCols(
