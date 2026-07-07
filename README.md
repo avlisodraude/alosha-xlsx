@@ -4,6 +4,9 @@
 
 [![Test](https://github.com/avlisodraude/alosha-xlsx/actions/workflows/test.yml/badge.svg)](https://github.com/avlisodraude/alosha-xlsx/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+[![Demo](https://img.shields.io/badge/demo-xlsx.alosha.dev-blue)](https://xlsx.alosha.dev/demo)
+
+**[Live demo →](https://xlsx.alosha.dev/demo)** · [xlsx.alosha.dev](https://xlsx.alosha.dev)
 
 `@alosha/xlsx` reads and writes real `.xlsx` (OOXML) workbooks from a single, ESM-first
 document model. The public surface is intentionally ExcelJS-shaped, so most code ports with

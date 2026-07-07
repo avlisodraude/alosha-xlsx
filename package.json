@@ -17,7 +17,7 @@
     "type": "git",
     "url": "git+https://github.com/avlisodraude/alosha-xlsx.git"
   },
-  "homepage": "https://github.com/avlisodraude/alosha-xlsx#readme",
+  "homepage": "https://xlsx.alosha.dev",
   "bugs": "https://github.com/avlisodraude/alosha-xlsx/issues",
   "type": "module",
   "sideEffects": [
