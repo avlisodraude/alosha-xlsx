@@ -75,6 +75,9 @@ export interface Styles {
   /** Intern a resolved cell Style; returns its cellXf index (the value for a cell's `s=""` attr). A cell
    *  with no style — or a structurally-default one — returns 0, the seeded default cellXf. */
   addStyle(style: Style | undefined): number;
+  /** Intern a differential style into the `<dxfs>` pool; returns its dxf index (a conditional-format
+   *  rule's `dxfId`). Unlike {@link addStyle} there is no baseline seed — dxf ids start at 0. */
+  addDxf(style: Partial<Style> | undefined): number;
   /** Render the complete xl/styles.xml. Always non-empty (the baseline seeds are always present). */
   toXml(): string;
 }
@@ -116,6 +119,8 @@ class StylesBuilder implements Styles {
   private readonly cellXfs = new InternPool([
     renderXf({ numFmtId: 0, fontId: 0, fillId: 0, borderId: 0 }),
   ]);
+  /** Differential styles for conditional formatting. No baseline seed: dxf ids start at 0. */
+  private readonly dxfs = new InternPool([]);
 
   /** Custom number-format code → allocated id (≥ 164), and the `<numFmt>` fragments in id order. */
   private readonly customNumFmtIds = new Map<string, number>();
@@ -147,6 +152,10 @@ class StylesBuilder implements Styles {
     );
     this.cache.set(style, id);
     return id;
+  }
+
+  addDxf(style: Partial<Style> | undefined): number {
+    return this.dxfs.intern(renderDxf(style));
   }
 
   private internNumFmt(code: string | undefined): number {
@@ -195,7 +204,14 @@ class StylesBuilder implements Styles {
     w.leaf("cellStyle", { name: "Normal", xfId: 0, builtinId: 0 });
     w.close("cellStyles");
 
-    w.leaf("dxfs", { count: 0 });
+    if (this.dxfs.count > 0) {
+      w.open("dxfs", { count: this.dxfs.count });
+      for (const x of this.dxfs.xml) w.raw(x);
+      w.close("dxfs");
+    } else {
+      w.leaf("dxfs", { count: 0 });
+    }
+
     w.leaf("tableStyles", {
       count: 0,
       defaultTableStyle: "TableStyleMedium2",
@@ -345,6 +361,79 @@ export function renderXf(xf: XfParts): string {
     if (protectionXml) w.raw(protectionXml);
     w.close("xf");
   }
+  return w.toString();
+}
+
+/**
+ * `<dxf>` — a differential style for conditional formatting (CT_Dxf). Child order is
+ * `font, numFmt, fill, alignment, border, protection`; only the present sub-objects are emitted.
+ * `renderFont`/`renderBorder` are reused as-is, but the fill and numFmt need dxf-specific renderers
+ * (see {@link renderDxfFill}). An empty style yields a bare `<dxf/>`, which Excel tolerates.
+ */
+export function renderDxf(style: Partial<Style> | undefined): string {
+  const w = new XmlWriter({ declaration: false });
+  const font = style?.font ? renderFont(style.font) : "";
+  const numFmt = style?.numFmt !== undefined ? renderDxfNumFmt(style.numFmt) : "";
+  const fill = style?.fill ? renderDxfFill(style.fill) : "";
+  const alignment = style?.alignment ? renderAlignment(style.alignment) : "";
+  const border = style?.border ? renderBorder(style.border) : "";
+  const protection = style?.protection ? renderProtection(style.protection) : "";
+
+  if (
+    font === "" &&
+    numFmt === "" &&
+    fill === "" &&
+    alignment === "" &&
+    border === "" &&
+    protection === ""
+  ) {
+    w.leaf("dxf");
+    return w.toString();
+  }
+  w.open("dxf");
+  if (font) w.raw(font);
+  if (numFmt) w.raw(numFmt);
+  if (fill) w.raw(fill);
+  if (alignment) w.raw(alignment);
+  if (border) w.raw(border);
+  if (protection) w.raw(protection);
+  w.close("dxf");
+  return w.toString();
+}
+
+/** A dxf `<numFmt>`: the `formatCode` is what matters (the reader inverts by it); the `numFmtId` reuses
+ *  a built-in id when the code is one, else the first custom slot. */
+function renderDxfNumFmt(code: string): string {
+  const id = BUILTIN_NUMFMT_BY_CODE.get(code) ?? FIRST_CUSTOM_NUMFMT_ID;
+  const w = new XmlWriter({ declaration: false });
+  w.leaf("numFmt", { numFmtId: id, formatCode: code });
+  return w.toString();
+}
+
+/** A dxf `<fill>`. **Footgun:** unlike a cellXf solid fill (colour in `<fgColor>`), a dxf highlight
+ *  carries its colour in `<patternFill><bgColor>` — so the fill's colour (from either `bgColor` or
+ *  `fgColor`) is emitted as `bgColor`. A non-solid pattern keeps its `patternType`. */
+function renderDxfFill(fill: Fill): string {
+  const w = new XmlWriter({ declaration: false });
+  w.open("fill");
+  if (fill.type === "pattern") {
+    const color = fill.bgColor ?? fill.fgColor;
+    const patternType =
+      fill.pattern && fill.pattern !== "solid" && fill.pattern !== "none"
+        ? fill.pattern
+        : undefined;
+    if (color || patternType) {
+      w.open("patternFill", { patternType });
+      if (color) renderColor(w, "bgColor", color);
+      w.close("patternFill");
+    } else {
+      w.leaf("patternFill");
+    }
+  } else {
+    // A gradient fill is not meaningful as a dxf highlight; emit an empty patternFill to stay valid.
+    w.leaf("patternFill");
+  }
+  w.close("fill");
   return w.toString();
 }
 
