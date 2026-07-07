@@ -9,6 +9,14 @@ export {
   readWorkbookFile,
 } from "./read-workbook.js";
 export { createSharedStrings, type SharedStrings } from "./shared-strings.js";
+export {
+  type ByteSink,
+  type NodeWritableLike,
+  type StreamedRow,
+  WorkbookWriter,
+  type WorkbookWriterOptions,
+  WorksheetWriter,
+} from "./stream/index.js";
 export { createStyles, type Styles } from "./styles.js";
 export {
   type WriteOptions,
