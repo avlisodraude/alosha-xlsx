@@ -224,6 +224,26 @@ function argbToCfColor(argb: unknown): unknown {
   return typeof argb === "string" ? { argb } : argb;
 }
 
+/** ExcelJS represents the text-contains family as a single `type: "containsText"` with the real
+ *  variant carried on `operator`; the core model uses a literal `type` per variant instead (§4
+ *  text-family bridge, closing MIGRATION.md D3's first divergence). Maps ExcelJS's `operator` value
+ *  to the core's `type`. */
+const CF_TEXT_OPERATOR_TO_CORE_TYPE: Record<string, string> = {
+  containsText: "containsText",
+  notContains: "notContainsText",
+  beginsWith: "beginsWith",
+  endsWith: "endsWith",
+};
+
+/** The inverse of {@link CF_TEXT_OPERATOR_TO_CORE_TYPE}, applied when denormalizing a core rule back
+ *  to ExcelJS's `{type: "containsText", operator}` shape. */
+const CF_TEXT_CORE_TYPE_TO_OPERATOR: Record<string, string> = {
+  containsText: "containsText",
+  notContainsText: "notContains",
+  beginsWith: "beginsWith",
+  endsWith: "endsWith",
+};
+
 function normalizeCfRule(rule: unknown): unknown {
   if (rule === null || typeof rule !== "object") return rule;
   const r = rule as Record<string, unknown>;
@@ -232,6 +252,14 @@ function normalizeCfRule(rule: unknown): unknown {
   }
   if (r.type === "dataBar" && r.color !== undefined) {
     return { ...r, color: cfColorToArgb(r.color) };
+  }
+  if (r.type === "containsText" && typeof r.operator === "string") {
+    const coreType = CF_TEXT_OPERATOR_TO_CORE_TYPE[r.operator];
+    if (coreType !== undefined) {
+      const rest = { ...r };
+      delete rest.operator;
+      return { ...rest, type: coreType };
+    }
   }
   return rule;
 }
@@ -244,6 +272,9 @@ function denormalizeCfRule(rule: unknown): unknown {
   }
   if (r.type === "dataBar" && r.color !== undefined) {
     return { ...r, color: argbToCfColor(r.color) };
+  }
+  if (typeof r.type === "string" && r.type in CF_TEXT_CORE_TYPE_TO_OPERATOR) {
+    return { ...r, type: "containsText", operator: CF_TEXT_CORE_TYPE_TO_OPERATOR[r.type] };
   }
   return rule;
 }
@@ -454,6 +485,30 @@ function proxyWorksheet(worksheet: Worksheet): Worksheet {
       }
       if (prop === "conditionalFormattings") {
         return denormalizeConditionalFormattings(target.conditionalFormattings);
+      }
+      // §4 removeConditionalFormatting bridge: ExcelJS accepts an index (splice), a predicate run
+      // over the denormalized (ExcelJS-shaped) blocks, or no argument (clear all); the core only
+      // exposes by-ref removal, so resolve the index/predicate against a snapshot of
+      // `conditionalFormattings` first, then drive the core method with each matched block's `ref`
+      // (closing MIGRATION.md D3's second divergence).
+      if (prop === "removeConditionalFormatting") {
+        return (filter?: unknown) => {
+          const cfs = target.conditionalFormattings;
+          if (typeof filter === "number") {
+            const cf = cfs.at(filter);
+            if (cf) target.removeConditionalFormatting(cf.ref);
+            return;
+          }
+          if (typeof filter === "function") {
+            const predicate = filter as (cf: unknown, index: number, array: unknown[]) => unknown;
+            const denorm = denormalizeConditionalFormattings(cfs);
+            cfs.forEach((cf, i) => {
+              if (!predicate(denorm[i], i, denorm)) target.removeConditionalFormatting(cf.ref);
+            });
+            return;
+          }
+          for (const cf of cfs) target.removeConditionalFormatting(cf.ref);
+        };
       }
       // ExcelJS parity: default `eachRow` skips empty rows (§ MIGRATION "eachRow/eachCell").
       if (prop === "eachRow") {

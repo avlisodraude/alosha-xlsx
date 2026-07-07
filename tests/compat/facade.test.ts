@@ -431,6 +431,123 @@ describe("compat facade — conditional formatting colour-shape bridge (CONDITIO
   });
 });
 
+describe("compat facade — containsText family type/operator bridge (CONDITIONAL-FORMATTING-SPEC §4, MIGRATION D3)", () => {
+  interface CfFacadeWorksheet {
+    addConditionalFormatting: (cf: unknown) => unknown;
+    conditionalFormattings: unknown[];
+  }
+
+  it.each([
+    ["containsText", "containsText"],
+    ["notContains", "notContainsText"],
+    ["beginsWith", "beginsWith"],
+    ["endsWith", "endsWith"],
+  ] as const)("normalizes ExcelJS's {type:'containsText', operator:%s} to the core's {type:%s} before it reaches the writer", async (operator, coreType) => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("S") as unknown as CfFacadeWorksheet;
+
+    ws.addConditionalFormatting({
+      ref: "A1:A10",
+      rules: [{ type: "containsText", operator, text: "foo" }],
+    });
+
+    const buf = await (
+      wb as unknown as { xlsx: { writeBuffer: () => Promise<Uint8Array> } }
+    ).xlsx.writeBuffer();
+    const back = readWorkbookBuffer(buf);
+    const data = back.getWorksheet("S");
+    if (!data) throw new Error("S sheet missing");
+    expect(data.conditionalFormattings[0]?.rules[0]).toMatchObject({
+      type: coreType,
+      text: "foo",
+    });
+  });
+
+  it("denormalizes the core's per-variant type back to ExcelJS's {type:'containsText', operator} on read", () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("S") as unknown as CfFacadeWorksheet;
+
+    ws.addConditionalFormatting({
+      ref: "A1:A10",
+      rules: [{ type: "containsText", operator: "beginsWith", text: "foo" }],
+    });
+
+    expect(ws.conditionalFormattings).toEqual([
+      {
+        ref: "A1:A10",
+        rules: [{ type: "containsText", operator: "beginsWith", text: "foo" }],
+      },
+    ]);
+  });
+
+  it("still accepts the core's native per-variant type with no operator field", () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("S") as unknown as CfFacadeWorksheet;
+
+    ws.addConditionalFormatting({
+      ref: "A1:A10",
+      rules: [{ type: "endsWith", text: "bar" }],
+    });
+
+    expect(ws.conditionalFormattings).toEqual([
+      {
+        ref: "A1:A10",
+        rules: [{ type: "containsText", operator: "endsWith", text: "bar" }],
+      },
+    ]);
+  });
+});
+
+describe("compat facade — removeConditionalFormatting index/predicate/clear-all bridge (CONDITIONAL-FORMATTING-SPEC §4, MIGRATION D3)", () => {
+  interface CfFacadeWorksheet {
+    addConditionalFormatting: (cf: unknown) => unknown;
+    removeConditionalFormatting: (filter?: unknown) => void;
+    conditionalFormattings: Array<{ ref: string }>;
+  }
+
+  function buildThreeBlocks(): CfFacadeWorksheet {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("S") as unknown as CfFacadeWorksheet;
+    ws.addConditionalFormatting({
+      ref: "A1:A10",
+      rules: [{ type: "cellIs", operator: "greaterThan", formulae: [5] }],
+    });
+    ws.addConditionalFormatting({
+      ref: "B1:B10",
+      rules: [{ type: "cellIs", operator: "lessThan", formulae: [5] }],
+    });
+    ws.addConditionalFormatting({
+      ref: "C1:C10",
+      rules: [{ type: "cellIs", operator: "equal", formulae: [5] }],
+    });
+    return ws;
+  }
+
+  it("removes the block at an index, ExcelJS-splice style", () => {
+    const ws = buildThreeBlocks();
+    ws.removeConditionalFormatting(1);
+    expect(ws.conditionalFormattings.map((cf) => cf.ref)).toEqual(["A1:A10", "C1:C10"]);
+  });
+
+  it("supports a negative index like Array.prototype.splice", () => {
+    const ws = buildThreeBlocks();
+    ws.removeConditionalFormatting(-1);
+    expect(ws.conditionalFormattings.map((cf) => cf.ref)).toEqual(["A1:A10", "B1:B10"]);
+  });
+
+  it("keeps only the blocks for which the predicate returns truthy, Array.prototype.filter style", () => {
+    const ws = buildThreeBlocks();
+    ws.removeConditionalFormatting((cf: { ref: string }) => cf.ref !== "B1:B10");
+    expect(ws.conditionalFormattings.map((cf) => cf.ref)).toEqual(["A1:A10", "C1:C10"]);
+  });
+
+  it("clears every block when called with no argument", () => {
+    const ws = buildThreeBlocks();
+    ws.removeConditionalFormatting();
+    expect(ws.conditionalFormattings).toEqual([]);
+  });
+});
+
 describe("compat facade — eachRow/eachCell skip empty like ExcelJS (0.3.1)", () => {
   it("default iteration drops empty rows and explicitly-null cells", () => {
     const wb = new ExcelJS.Workbook();

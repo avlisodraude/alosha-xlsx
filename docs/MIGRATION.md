@@ -47,24 +47,30 @@ from ExcelJS relies on the latter to render identically, so compat-mode style se
 never the core's field merge. Again, this is scoped to compat-constructed workbooks; the plain
 `@alosha/xlsx` API is unaffected.
 
-**D3 — conditional formatting: the colour bridge is bidirectional, but two shapes are *not* bridged.**
+**D3 — conditional formatting: the colour bridge is bidirectional; the text-family and
+`removeConditionalFormatting` shapes are too, as of 0.10.1.**
 `worksheet.addConditionalFormatting`/`conditionalFormattings` normalize a `colorScale`/`dataBar` rule's
 colour between ExcelJS's `{ argb }` object and the core model's bare ARGB string automatically — pass
-either shape in, and `conditionalFormattings` always reads back ExcelJS's `{ argb }` form. Two other
-shapes are **not** bridged, by design (out of scope for the 0.7.0 pass):
+either shape in, and `conditionalFormattings` always reads back ExcelJS's `{ argb }` form. Two more
+shapes are bridged the same way:
 - **The text-contains family's `type`/`operator` split.** Real ExcelJS represents `beginsWith`,
   `endsWith`, `notContainsText`, etc. as `{ type: "containsText", operator: "beginsWith", … }` — a
   single `type` with the real variant carried on `operator`. `@alosha/xlsx`'s core model instead uses
-  a literal `type` per variant (`{ type: "beginsWith", … }`, no `operator` field). Construct these
-  rules with **the core's shape** (`type: "beginsWith"`) through the compat facade; an
-  ExcelJS-idiomatic `{ type: "containsText", operator: "beginsWith" }` call is accepted but silently
-  renders as a plain "contains" rule instead, since only `type` is read.
+  a literal `type` per variant (`{ type: "beginsWith", … }`, no `operator` field). Either shape works
+  through the compat facade now: an ExcelJS-idiomatic `{ type: "containsText", operator: "beginsWith" }`
+  call normalizes to the core's `{ type: "beginsWith" }` before it reaches the writer, and
+  `conditionalFormattings` always reads back ExcelJS's `{ type: "containsText", operator }` form
+  (mirroring the colour bridge above), whether or not the block was constructed with `operator`.
 - **`removeConditionalFormatting`'s argument.** ExcelJS accepts an index, a predicate function, or no
   argument (clear all); the core model's `removeConditionalFormatting(ref)` removes by exact `ref`
-  string match instead. An ExcelJS-style call (`removeConditionalFormatting(0)`,
-  `removeConditionalFormatting(rule => …)`) is accepted (it isn't in the deferred/throwing list) but
-  silently removes nothing, since no `ref` will ever equal a number or a function. Call it with the
-  block's `ref` string instead.
+  string match instead. All three ExcelJS forms now work through the compat facade — an index or
+  predicate is resolved against a snapshot of `conditionalFormattings` (the predicate sees the same
+  denormalized, ExcelJS-shaped blocks that getter returns) and mapped onto the matching block(s)' core
+  `removeConditionalFormatting(ref)` call; a call with no argument (or any other value) clears every
+  block, matching ExcelJS's `else` branch. One edge case doesn't fully match real ExcelJS: because the
+  bridge ultimately removes **by `ref`**, an index/predicate call that's meant to keep one block but
+  drop another sharing the *exact same* `ref` string will drop both — real ExcelJS's index-based splice
+  has no such collision. Give blocks distinct `ref`s (the common case) to avoid it.
 
 **D4 — `cell.note` (comments): author isn't part of ExcelJS's real contract, and a note needs a valued
 cell.** Real ExcelJS's own comments writer hardcodes a single author name ("Author") for every comment

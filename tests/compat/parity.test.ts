@@ -402,6 +402,7 @@ interface CfSample {
   priority: number | undefined;
   fillArgb: string | undefined;
   colors: (string | undefined)[] | undefined;
+  text: string | undefined;
 }
 
 function sampleConditionalFormattings(wb: AnyWorkbook, sheetName: string): CfSample[] {
@@ -414,6 +415,7 @@ function sampleConditionalFormattings(wb: AnyWorkbook, sheetName: string): CfSam
       priority?: number;
       style?: { fill?: { fgColor?: { argb?: string }; bgColor?: { argb?: string } } };
       color?: Array<{ argb?: string }>;
+      text?: string;
     }>;
   }>;
   const samples: CfSample[] = [];
@@ -427,6 +429,7 @@ function sampleConditionalFormattings(wb: AnyWorkbook, sheetName: string): CfSam
         priority: rule.priority,
         fillArgb: fill?.bgColor?.argb ?? fill?.fgColor?.argb,
         colors: rule.color?.map((c) => c?.argb),
+        text: rule.text,
       });
     }
   }
@@ -511,8 +514,8 @@ describe("compat parity — cell comments", () => {
   });
 });
 
-describe("compat parity — conditional formatting (cellIs highlight + colorScale)", () => {
-  it("rule type/operator/priority, the highlight argb, and the colorScale colours match real exceljs", async (ctx) => {
+describe("compat parity — conditional formatting (cellIs highlight + colorScale + containsText)", () => {
+  it("rule type/operator/priority, the highlight argb, the colorScale colours, and the containsText text match real exceljs", async (ctx) => {
     const RealExcelJS = await loadRealExceljs();
     if (!RealExcelJS) {
       ctx.skip();
@@ -546,6 +549,25 @@ describe("compat parity — conditional formatting (cellIs highlight + colorScal
           },
         ],
       });
+      ws.addConditionalFormatting({
+        ref: "D1:D10",
+        rules: [
+          {
+            type: "containsText",
+            operator: "beginsWith",
+            text: "foo",
+            priority: 3,
+          },
+        ],
+      });
+      // A fourth block added then removed by index — proves `removeConditionalFormatting(index)`
+      // (MIGRATION.md D3) behaves identically to real ExcelJS's splice-by-index and never reaches
+      // the writer.
+      ws.addConditionalFormatting({
+        ref: "E1:E5",
+        rules: [{ type: "cellIs", operator: "lessThan", formulae: [0], priority: 4 }],
+      });
+      ws.removeConditionalFormatting(3);
     };
 
     const real = new RealExcelJS.Workbook();
