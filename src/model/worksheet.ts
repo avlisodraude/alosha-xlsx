@@ -18,6 +18,7 @@ import {
 import type { Cell } from "./cell.js";
 import type { CellValue } from "./cell-value.js";
 import { Column, type ColumnDefn, type ColumnRange } from "./column.js";
+import { type CommentModel, Comments } from "./comment.js";
 import type { ConditionalFormatting } from "./conditional-formatting.js";
 import { type DataValidationModel, DataValidations } from "./data-validation.js";
 import { CellType } from "./enums.js";
@@ -80,6 +81,8 @@ export interface WorksheetModel {
   rows: RowModel[];
   merges: string[];
   dataValidations?: DataValidationModel[];
+  /** Cell comments, one entry per noted cell `ref` (`cell.note`). */
+  comments?: CommentModel[];
   /** `<conditionalFormatting>` blocks: one entry per `ref`, each carrying its ordered rules. */
   conditionalFormattings?: ConditionalFormatting[];
   /** `<autoFilter ref="…">`, an A1 range like `"A1:D1"`. */
@@ -156,6 +159,8 @@ export class Worksheet implements WorksheetHost {
   private readonly _merges = new Map<string, Range>();
   /** Data validations keyed by `sqref`; reached by cells through `WorksheetHost`. */
   private readonly _dataValidations = new DataValidations();
+  /** Cell comments keyed by ref; reached by cells through `WorksheetHost`. */
+  private readonly _comments = new Comments();
   /** Conditional-formatting blocks in insertion order (sheet-level, not cell-routed). */
   private _conditionalFormattings: ConditionalFormatting[] = [];
 
@@ -553,6 +558,13 @@ export class Worksheet implements WorksheetHost {
     return this._dataValidations;
   }
 
+  // --- comments ---------------------------------------------------------------------------------
+
+  /** Ref-keyed cell-comment store (`add`/`find`/`remove`/`model`); `cell.note` reads/writes it. */
+  get comments(): Comments {
+    return this._comments;
+  }
+
   // --- conditional formatting -------------------------------------------------------------------
 
   /** The worksheet's conditional-formatting blocks, in insertion order. */
@@ -614,6 +626,7 @@ export class Worksheet implements WorksheetHost {
     };
     if (columns) m.columns = columns;
     if (this._dataValidations.size > 0) m.dataValidations = this._dataValidations.model;
+    if (this._comments.size > 0) m.comments = this._comments.model;
     if (this._conditionalFormattings.length > 0) {
       m.conditionalFormattings = this._conditionalFormattings.map((cf) => ({
         ref: cf.ref,
@@ -642,6 +655,7 @@ export class Worksheet implements WorksheetHost {
     this._columnsByKey.clear();
     this._merges.clear();
     this._dataValidations.model = m.dataValidations ?? [];
+    this._comments.model = m.comments ?? [];
     this._conditionalFormattings = (m.conditionalFormattings ?? []).map((cf) => ({
       ref: cf.ref,
       rules: cf.rules.map((r) => ({ ...r })),

@@ -3,6 +3,7 @@
 
 import { colLetterToNumber } from "../../../src/address/index.js";
 import { Column } from "../../../src/model/column.js";
+import { Comments } from "../../../src/model/comment.js";
 import { DataValidations } from "../../../src/model/data-validation.js";
 import { Row } from "../../../src/model/row.js";
 import type { WorksheetHost } from "../../../src/model/worksheet-host.js";
@@ -16,6 +17,8 @@ export class FakeWorksheetHost implements WorksheetHost {
   > = { outlineLevelCol: 0, outlineLevelRow: 0 };
 
   readonly dataValidations = new DataValidations();
+
+  readonly comments = new Comments();
 
   private readonly columnsByNumber = new Map<number, Column>();
   private readonly columnsByKey = new Map<string, Column>();

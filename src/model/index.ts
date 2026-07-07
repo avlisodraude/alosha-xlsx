@@ -12,6 +12,8 @@ export type {
 export { detectType, effectiveType, fromStored, toCsv, toStored, toText } from "./cell-value.js";
 export type { ColumnDefn, ColumnRange } from "./column.js";
 export { Column, DEFAULT_COLUMN_WIDTH } from "./column.js";
+export type { Comment, CommentModel } from "./comment.js";
+export { Comments, DEFAULT_COMMENT_AUTHOR } from "./comment.js";
 export type {
   CfAverage,
   CfCellIs,

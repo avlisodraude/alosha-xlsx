@@ -12,6 +12,7 @@ import {
   type Worksheet,
 } from "../../../src/model/index.js";
 import { serialToDate } from "../../../src/xlsx/date.js";
+import { REL_TYPE } from "../../../src/xlsx/parts/constants.js";
 import { renderWorksheet } from "../../../src/xlsx/parts/worksheet.js";
 import { parseSharedStrings } from "../../../src/xlsx/read/shared-strings.js";
 import { parseStyles, type StyleTable } from "../../../src/xlsx/read/styles.js";
@@ -531,6 +532,176 @@ describe("parseWorksheet — hyperlinks", () => {
     );
 
     expect(s.getCell("A1").value).toBe("Plain");
+  });
+});
+
+// --- comments (docs/COMMENTS-SPEC.md §2): <legacyDrawing>/rels -> comments{n}.xml -> cell.note --------
+
+describe("parseWorksheet — comments", () => {
+  const commentsXml =
+    '<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+    "<authors><author>Author</author></authors>" +
+    '<commentList><comment ref="B2" authorId="0"><text><t>hi</t></text></comment></commentList>' +
+    "</comments>";
+
+  it("follows <legacyDrawing>/rels to comments{n}.xml and applies cell.note", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(`<legacyDrawing r:id="rId2"/>`),
+      ctx({
+        rels: new Map([
+          [
+            "rId2",
+            { type: REL_TYPE.vmlDrawing, target: "xl/drawings/vmlDrawing1.vml", mode: "Internal" },
+          ],
+          ["rId1", { type: REL_TYPE.comments, target: "xl/comments1.xml", mode: "Internal" }],
+        ]),
+        readPart: (path) => (path === "xl/comments1.xml" ? commentsXml : undefined),
+      }),
+    );
+    expect(s.getCell("B2").note).toEqual({ texts: "hi", author: "Author" });
+  });
+
+  it("leaves every cell without a note when there is no <legacyDrawing>", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(""),
+      ctx({
+        rels: new Map([
+          ["rId1", { type: REL_TYPE.comments, target: "xl/comments1.xml", mode: "Internal" }],
+        ]),
+        readPart: (path) => (path === "xl/comments1.xml" ? commentsXml : undefined),
+      }),
+    );
+    expect(s.getCell("B2").note).toBeUndefined();
+  });
+
+  it("leaves every cell without a note when the legacyDrawing rId is absent from rels", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(`<legacyDrawing r:id="rId9"/>`),
+      ctx({
+        rels: new Map([
+          ["rId1", { type: REL_TYPE.comments, target: "xl/comments1.xml", mode: "Internal" }],
+        ]),
+        readPart: (path) => (path === "xl/comments1.xml" ? commentsXml : undefined),
+      }),
+    );
+    expect(s.getCell("B2").note).toBeUndefined();
+  });
+
+  it("leaves every cell without a note when the sheet has no comments-typed rel", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(`<legacyDrawing r:id="rId2"/>`),
+      ctx({
+        rels: new Map([
+          [
+            "rId2",
+            { type: REL_TYPE.vmlDrawing, target: "xl/drawings/vmlDrawing1.vml", mode: "Internal" },
+          ],
+        ]),
+        readPart: (path) => (path === "xl/comments1.xml" ? commentsXml : undefined),
+      }),
+    );
+    expect(s.getCell("B2").note).toBeUndefined();
+  });
+
+  it("leaves every cell without a note when the comments part is missing from the package", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(`<legacyDrawing r:id="rId2"/>`),
+      ctx({
+        rels: new Map([
+          [
+            "rId2",
+            { type: REL_TYPE.vmlDrawing, target: "xl/drawings/vmlDrawing1.vml", mode: "Internal" },
+          ],
+          ["rId1", { type: REL_TYPE.comments, target: "xl/comments1.xml", mode: "Internal" }],
+        ]),
+        readPart: () => undefined,
+      }),
+    );
+    expect(s.getCell("B2").note).toBeUndefined();
+  });
+
+  it("leaves every cell without a note when readPart is absent from the context", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(`<legacyDrawing r:id="rId2"/>`),
+      ctx({
+        rels: new Map([
+          [
+            "rId2",
+            { type: REL_TYPE.vmlDrawing, target: "xl/drawings/vmlDrawing1.vml", mode: "Internal" },
+          ],
+          ["rId1", { type: REL_TYPE.comments, target: "xl/comments1.xml", mode: "Internal" }],
+        ]),
+      }),
+    );
+    expect(s.getCell("B2").note).toBeUndefined();
+  });
+
+  it("skips a comment with a malformed ref, keeping any other well-formed comments", () => {
+    const malformed =
+      '<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+      "<authors><author>Author</author></authors>" +
+      "<commentList>" +
+      '<comment ref="not a ref!" authorId="0"><text><t>bad</t></text></comment>' +
+      '<comment ref="C5" authorId="0"><text><t>good</t></text></comment>' +
+      "</commentList>" +
+      "</comments>";
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(`<legacyDrawing r:id="rId2"/>`),
+      ctx({
+        rels: new Map([
+          [
+            "rId2",
+            { type: REL_TYPE.vmlDrawing, target: "xl/drawings/vmlDrawing1.vml", mode: "Internal" },
+          ],
+          ["rId1", { type: REL_TYPE.comments, target: "xl/comments1.xml", mode: "Internal" }],
+        ]),
+        readPart: (path) => (path === "xl/comments1.xml" ? malformed : undefined),
+      }),
+    );
+    expect(s.getCell("C5").note).toEqual({ texts: "good", author: "Author" });
+  });
+
+  it("inverts a rich-text comment into RichText texts", () => {
+    const rich =
+      '<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+      "<authors><author>Alice</author></authors>" +
+      '<commentList><comment ref="C3" authorId="0"><text>' +
+      "<r><rPr><b/></rPr><t>bold</t></r><r><t>plain</t></r>" +
+      "</text></comment></commentList>" +
+      "</comments>";
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(`<legacyDrawing r:id="rId2"/>`),
+      ctx({
+        rels: new Map([
+          [
+            "rId2",
+            { type: REL_TYPE.vmlDrawing, target: "xl/drawings/vmlDrawing1.vml", mode: "Internal" },
+          ],
+          ["rId1", { type: REL_TYPE.comments, target: "xl/comments1.xml", mode: "Internal" }],
+        ]),
+        readPart: (path) => (path === "xl/comments1.xml" ? rich : undefined),
+      }),
+    );
+    expect(s.getCell("C3").note).toEqual({
+      texts: { richText: [{ text: "bold", font: { bold: true } }, { text: "plain" }] },
+      author: "Alice",
+    });
   });
 });
 

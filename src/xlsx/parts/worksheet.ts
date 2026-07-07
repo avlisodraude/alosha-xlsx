@@ -12,6 +12,7 @@
 import { Range } from "../../address/index.js";
 import type {
   CellModel,
+  CommentModel,
   ConditionalFormatting,
   ConditionalRule,
   DataValidationModel,
@@ -20,6 +21,7 @@ import type {
 import {
   CellType,
   DATA_VALIDATION_OPERATOR_TYPES,
+  DEFAULT_COMMENT_AUTHOR,
   type RichText,
   type Worksheet,
 } from "../../model/index.js";
@@ -27,8 +29,10 @@ import { XmlWriter } from "../../xml/index.js";
 import { dateToSerial } from "../date.js";
 import type { SharedStrings } from "../shared-strings.js";
 import type { Styles } from "../styles.js";
+import { type CommentRecord, renderComments } from "./comments.js";
 import type { WorksheetRel } from "./constants.js";
-import { NS, REL_TYPE } from "./constants.js";
+import { CONTENT_TYPE, NS, REL_TYPE } from "./constants.js";
+import { renderVmlDrawing } from "./vml-drawing.js";
 import { renderWorksheetRels } from "./worksheet-rels.js";
 
 export interface WorksheetContext {
@@ -129,6 +133,9 @@ export function renderWorksheet(ws: Worksheet, ctx: WorksheetContext): RenderedW
   renderConditionalFormatting(w, model.conditionalFormattings, ctx);
   renderDataValidations(w, model.dataValidations);
   renderHyperlinks(w, hyperlinks, alloc);
+  // `<legacyDrawing>` is the last child (CT_Worksheet: `…drawing, legacyDrawing`), so comments run
+  // after hyperlinks — their rels take rIds after any hyperlink rels too.
+  renderSheetComments(w, model.comments, ctx, alloc, extraParts);
 
   w.close("worksheet");
   const rels = alloc.rels.length > 0 ? renderWorksheetRels(alloc.rels) : undefined;
@@ -588,4 +595,48 @@ function renderHyperlinks(
     alloc.rels.push({ rId, type: REL_TYPE.hyperlink, target: h.target, mode: "External" });
   }
   w.close("hyperlinks");
+}
+
+/** Emit the legacy-comment wiring for a sheet with `cell.note`s (docs/COMMENTS-SPEC.md §1): push the
+ *  `comments{n}.xml` note table and the `vmlDrawing{n}.vml` anchor part as F0 `ExtraPart`s, allocate a
+ *  rel for each off the shared sheet allocator, and emit `<legacyDrawing r:id>` (the vmlDrawing rId) as
+ *  the sheet's last child. Authors default to `"Author"` when unset (ExcelJS parity). */
+function renderSheetComments(
+  w: XmlWriter,
+  comments: CommentModel[] | undefined,
+  ctx: WorksheetContext,
+  alloc: SheetRelAllocator,
+  extraParts: ExtraPart[],
+): void {
+  if (!comments || comments.length === 0) return;
+  const n = ctx.sheetNumber ?? 1;
+
+  const records: CommentRecord[] = comments.map((c) => ({
+    ref: c.ref,
+    texts: c.texts,
+    author: c.author ?? DEFAULT_COMMENT_AUTHOR,
+  }));
+
+  extraParts.push({
+    path: `xl/comments${n}.xml`,
+    data: renderComments(records),
+    contentType: CONTENT_TYPE.comments,
+  });
+  extraParts.push({
+    path: `xl/drawings/vmlDrawing${n}.vml`,
+    data: renderVmlDrawing(records.map((r) => r.ref)),
+    defaultFor: { extension: "vml", contentType: CONTENT_TYPE.vmlDrawing },
+  });
+
+  const commentsRId = alloc.next();
+  alloc.rels.push({ rId: commentsRId, type: REL_TYPE.comments, target: `../comments${n}.xml` });
+  const vmlRId = alloc.next();
+  alloc.rels.push({
+    rId: vmlRId,
+    type: REL_TYPE.vmlDrawing,
+    target: `../drawings/vmlDrawing${n}.vml`,
+  });
+
+  // The `<legacyDrawing>` points at the VML, not the comments part.
+  w.leaf("legacyDrawing", { "r:id": vmlRId });
 }

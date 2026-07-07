@@ -18,6 +18,7 @@ import {
   toText,
 } from "./cell-value.js";
 import type { Column } from "./column.js";
+import type { Comment } from "./comment.js";
 import type { DataValidation } from "./data-validation.js";
 import { CellType, FormulaType } from "./enums.js";
 import type { Row } from "./row.js";
@@ -203,6 +204,15 @@ export class Cell {
 
   set dataValidation(dv: DataValidation) {
     this.rowRef.worksheet.dataValidations.add(this.address, dv);
+  }
+
+  /** The comment on this cell, if any (resolved through the worksheet's ref-keyed store). */
+  get note(): Comment | undefined {
+    return this.rowRef.worksheet.comments.find(this.address);
+  }
+
+  set note(comment: Comment) {
+    this.rowRef.worksheet.comments.add(this.address, comment);
   }
 
   get model(): CellModel {

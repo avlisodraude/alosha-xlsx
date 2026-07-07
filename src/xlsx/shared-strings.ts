@@ -98,8 +98,9 @@ function stableStringify(value: unknown): string {
 }
 
 /** Render a run's `<rPr>` properties from its font, or `""` when there is nothing to emit. Element
- *  order follows the ECMA-376 CT_RPrElt schema so Excel accepts the file without repair. */
-function renderRunProps(font: Font | undefined): string {
+ *  order follows the ECMA-376 CT_RPrElt schema so Excel accepts the file without repair. Shared with
+ *  the comments writer (docs/COMMENTS-SPEC.md §1), whose `<text>` runs reuse the same `<r>`/`<rPr>`. */
+export function renderRunProps(font: Font | undefined): string {
   if (!font) return "";
   const w = new XmlWriter({ declaration: false });
   if (font.name !== undefined) w.leaf("rFont", { val: font.name });

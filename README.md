@@ -124,7 +124,7 @@ functions accept a `ReadOptions` (reserved for future use).
 | Conditional formatting (`cellIs`, `expression`, text-contains family, `top10`, `aboveAverage`/`belowAverage`, `duplicateValues`/`uniqueValues`, `colorScale`, `dataBar`, `iconSet`) | ✅ | ✅ | differential styles dedup into a `<dxfs>` pool; x14 dataBar gradient/axis/negative-fill, `timePeriod` rules, and custom iconSet icons deferred |
 | Streaming read/write | ❌ | ❌ | deferred |
 | Drawings / images / charts | ❌ | ❌ | deferred |
-| Comments | ❌ | ❌ | deferred |
+| Comments (`cell.note`) | ✅ | ✅ | note/author table (`comments{n}.xml`) + legacy VML anchor (`vmlDrawing{n}.vml`); threaded/modern comments and box geometry deferred |
 
 ## Migrating from ExcelJS
 
@@ -143,12 +143,12 @@ behave as you'd expect. Common differences to watch for:
 - **ESM-first.** The package is ESM with a CJS fallback; prefer `import` over `require`.
 
 Not everything ExcelJS does is implemented yet — check the feature matrix and limitations before
-porting a workbook that leans on drawings, streaming, or comments.
+porting a workbook that leans on drawings or streaming.
 
 **Want a one-line import swap instead?** `@alosha/xlsx/compat` is an ExcelJS-shaped drop-in — same
 `cell.type` numbers, same style-setter precedence, same `addRow`/`row.values`/`worksheet.columns`
 behaviour — for code that shouldn't need to change beyond `import ExcelJS from "@alosha/xlsx/compat"`.
-See [`docs/MIGRATION.md`](https://github.com/avlisodraude/alosha-xlsx/blob/main/docs/MIGRATION.md) for the supported/deferred matrix and the three
+See [`docs/MIGRATION.md`](https://github.com/avlisodraude/alosha-xlsx/blob/main/docs/MIGRATION.md) for the supported/deferred matrix and the four
 behavioural notes to check before porting.
 
 ## Known limitations
@@ -160,7 +160,10 @@ behavioural notes to check before porting.
 - **No streaming.** Reading and writing are buffer-based (the whole workbook lives in memory). A
   streaming API for very large sheets is deferred.
 - **No drawings, images, or charts.** These parts are ignored on read and not emitted on write.
-- **No comments** yet.
+- **Comments** (`cell.note`) round-trip plain-string and rich-text notes plus a multi-author
+  `<authors>` table, backed by `comments{n}.xml` + a legacy `vmlDrawing{n}.vml` anchor. Threaded/modern
+  comments (`xl/threadedComments/`) and comment box geometry/margins/`editAs`/visibility are deferred —
+  a default note-box shape is emitted and its geometry is ignored on read.
 - **Data validation** (list dropdowns, whole/decimal/date/time/text-length constraints, custom
   formulas) is supported for same-sheet ranges and inline lists. A list referencing a range on
   **another sheet** (the x14/`<extLst>` form Excel uses for that case) is deferred.

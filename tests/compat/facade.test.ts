@@ -175,15 +175,6 @@ describe("compat facade — deferred surface throws UnsupportedFeatureError (§6
     expect(() => ws.protect()).toThrow(UnsupportedFeatureError);
   });
 
-  it("cell-level: note (comments)", () => {
-    const wb = new ExcelJS.Workbook();
-    const ws = wb.addWorksheet("S");
-    const cell = ws.getCell("A1") as unknown as { note: unknown };
-    expect(() => {
-      cell.note = "hi";
-    }).toThrow(UnsupportedFeatureError);
-  });
-
   it("namespace-level: stream.xlsx.WorkbookWriter / WorkbookReader", () => {
     expect(() => new ExcelJS.stream.xlsx.WorkbookWriter()).toThrow(UnsupportedFeatureError);
     expect(() => new ExcelJS.stream.xlsx.WorkbookReader()).toThrow(UnsupportedFeatureError);
@@ -233,6 +224,37 @@ describe("compat facade — data validation is a real pass-through (DATA-VALIDAT
 
     ws.dataValidations.remove("B2:B10");
     expect(ws.dataValidations.find("B5")).toBeUndefined();
+  });
+});
+
+describe("compat facade — cell.note bridges ExcelJS's flat texts array (COMMENTS-SPEC.md §3)", () => {
+  it("a bare string passes straight through", () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("S");
+    const cell = ws.getCell("A1") as unknown as { note: unknown };
+
+    cell.note = "hello";
+    expect(cell.note).toBe("hello");
+  });
+
+  it("a rich texts array round-trips through our RichText wrapper", () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("S");
+    const cell = ws.getCell("A1") as unknown as { note: unknown };
+
+    cell.note = { texts: [{ text: "bold", font: { bold: true } }, { text: " plain" }] };
+    expect(cell.note).toEqual({
+      texts: [{ text: "bold", font: { bold: true } }, { text: " plain" }],
+    });
+  });
+
+  it("an author carries through get/set (a compat extension — ExcelJS itself has no author field)", () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("S");
+    const cell = ws.getCell("A1") as unknown as { note: unknown };
+
+    cell.note = { texts: "hi", author: "Alice" };
+    expect(cell.note).toEqual({ texts: "hi", author: "Alice" });
   });
 });
 
