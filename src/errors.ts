@@ -26,7 +26,9 @@ export type AloshaXlsxErrorCode =
   | "UNSUPPORTED_FEATURE"
   | "INVALID_PACKAGE"
   | "INVALID_PANE"
-  | "INVALID_CONDITIONAL_FORMATTING";
+  | "INVALID_CONDITIONAL_FORMATTING"
+  | "INVALID_IMAGE_ANCHOR"
+  | "INVALID_DRAWING";
 
 /**
  * Base class for all library errors. Abstract — never thrown directly; always a concrete subclass.
@@ -227,5 +229,29 @@ export class InvalidConditionalFormattingError extends AloshaXlsxError {
     public readonly value: string,
   ) {
     super(`Invalid <cfRule> ${attribute}: ${JSON.stringify(value)} is not a number.`);
+  }
+}
+
+/**
+ * An image anchor passed to `worksheet.addImage` is not one of the accepted forms: a `"B2:D6"` range
+ * string, `{ tl, br }`, or `{ tl, ext }` with a positive pixel extent (see docs/IMAGES-DRAWINGS-SPEC.md
+ * §1). A malformed range *string* surfaces {@link InvalidRangeError} from the decoder instead.
+ */
+export class InvalidImageAnchorError extends AloshaXlsxError {
+  readonly code = "INVALID_IMAGE_ANCHOR" as const;
+  constructor(public readonly anchor: unknown) {
+    super(`Invalid image anchor: ${JSON.stringify(anchor)}`);
+  }
+}
+
+/** A `<xdr:col>`/`<xdr:row>`/`<xdr:colOff>`/`<xdr:rowOff>` text value or an `<xdr:ext cx/cy>`
+ *  attribute is present but not a finite number (Track D reader, docs/IMAGES-DRAWINGS-SPEC.md §3). */
+export class InvalidDrawingError extends AloshaXlsxError {
+  readonly code = "INVALID_DRAWING" as const;
+  constructor(
+    public readonly attribute: "col" | "row" | "colOff" | "rowOff" | "cx" | "cy",
+    public readonly value: string,
+  ) {
+    super(`Invalid drawing anchor ${attribute}: ${JSON.stringify(value)} is not a number.`);
   }
 }

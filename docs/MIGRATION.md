@@ -28,7 +28,7 @@ main [`README.md`](../README.md#migrating-from-exceljs) instead — that's a dee
 `worksheets`, an object-shaped `inheritFrom` instead of the `'i'|'o'|'i+'|'o+'` DSL, etc.) with more
 freedom to diverge, since it doesn't have to stay drop-in compatible.
 
-## Three behavioural notes — read these before porting
+## Five behavioural notes — read these before porting
 
 **D1 — `cell.type` / `cell.effectiveType` report ExcelJS's numbers, not `@alosha/xlsx`'s own.**
 `@alosha/xlsx`'s core `CellType` enum shares names with ExcelJS's `ValueType` but **not** the same
@@ -81,6 +81,19 @@ staying a string across a full write→read cycle. Finally, ExcelJS only recogni
 that also carries a value in the sheet XML, so give a noted cell a value if you want the note to survive
 being opened elsewhere.
 
+**D5 — embedded images: only the `{ buffer }` input, and `worksheet.addBackgroundImage` is a
+permanent stub.** `workbook.addImage(image)` accepts ExcelJS's `{ extension, buffer }` form and routes
+straight to the core image registry; the `{ base64 }` and `{ filename }` input forms throw
+`UnsupportedFeatureError` instead of silently decoding (or worse, silently dropping) the image —
+re-encode to a `Uint8Array` and pass it as `buffer`. `worksheet.addImage`'s three ExcelJS anchor forms
+(`"B2:D6"`, `{ tl, br }`, `{ tl, ext }`) already match the core `ImageAnchor` type, so they pass
+straight through with no bridging. `worksheet.addBackgroundImage` (header/footer images) stays a
+documented stub — out of scope, not just "not yet" — and always throws. Note for anyone diffing
+against real ExcelJS directly: real ExcelJS's own `worksheet.getImages()` returns each anchor's
+`tl`/`br` as `Anchor` **class instances** (position under `nativeCol`/`nativeRow`, plus a
+`worksheet` back-reference), not the plain `{ col, row }` object `@alosha/xlsx/compat`'s
+`getImages()` returns — reload through real `exceljs` if you need that exact shape.
+
 ## Supported / deferred matrix
 
 | Feature | Status | Notes |
@@ -97,7 +110,8 @@ being opened elsewhere.
 | `worksheet.views` (freeze/split pane), `worksheet.autoFilter` | ✅ | pass-through — the core field names already match ExcelJS's. `autoFilter` also accepts ExcelJS's `{ from, to }` object form (each an address string or `{ row, column }`), normalized to an `"A1:D1"` range string. Multiple views per sheet, `<selection>`, and auto-filter criteria/sort state are still ⚠️ deferred. |
 | `stream.xlsx.WorkbookWriter` / `WorkbookReader` | ❌ deferred | throws `UnsupportedFeatureError` |
 | `workbook.csv.*` | ❌ deferred | throws `UnsupportedFeatureError` |
-| `addImage`/`getImage`/`workbook.media`/`worksheet.addImage` | ❌ deferred | throws `UnsupportedFeatureError` |
+| `workbook.addImage`/`getImage`/`media`, `worksheet.addImage`/`getImages` | ✅ | `{ buffer }` image input; `"B2:D6"` / `{tl,br}` / `{tl,ext}` anchors — see D5 above. `{ base64 }`/`{ filename }` image inputs throw `UnsupportedFeatureError`. Cropping/rotation/effects, hyperlinked images, SVG, and EMF/WMF are deferred. |
+| `worksheet.addBackgroundImage` (header/footer images) | ❌ deferred | throws `UnsupportedFeatureError`; permanent stub, not planned |
 | `worksheet.addTable`/`getTable(s)` (tables, pivot tables) | ❌ deferred | throws `UnsupportedFeatureError` |
 | `worksheet.addConditionalFormatting`/`removeConditionalFormatting`, `worksheet.conditionalFormattings` | ✅ | `cellIs`, `expression`, the text-contains family, `top10`, `aboveAverage`/`belowAverage`, `duplicateValues`/`uniqueValues`, `colorScale`, `dataBar`, `iconSet`. `colorScale`/`dataBar` colours are bridged bidirectionally between ExcelJS's `{argb}` objects and the core's bare-ARGB-string `CfColor` — see D3 below. Deferred: x14 dataBar gradient/axis/negative-fill extensions, `timePeriod` rules, custom `iconSet` icons. |
 | `cell.note` (comments) | ✅ | plain-string and rich-text notes, multi-author sheets. `author` is a compat/native-API extension ExcelJS itself doesn't round-trip — see D4 above. Deferred: threaded/modern comments (`xl/threadedComments/`), comment box geometry/margins/`editAs`/visibility. |

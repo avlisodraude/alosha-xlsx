@@ -418,6 +418,59 @@ describe("read round-trip — conditional formatting", () => {
   });
 });
 
+describe("read round-trip — images", () => {
+  it("persists a two-cell and a one-cell anchored image, byte-identical, on read-back", () => {
+    const wb = new Workbook();
+    const ws = wb.addWorksheet("Pics");
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const gif = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]);
+    const pngId = wb.addImage({ buffer: png, extension: "png" });
+    const gifId = wb.addImage({ buffer: gif, extension: "gif" });
+    ws.addImage(pngId, "B2:D6");
+    ws.addImage(gifId, { tl: { col: 5, row: 5 }, ext: { width: 100, height: 50 } });
+
+    const back = readWorkbookBuffer(writeWorkbookBuffer(wb));
+    const data = back.getWorksheet("Pics");
+    if (!data) throw new Error("Pics sheet missing");
+
+    expect(data.images).toEqual([
+      { imageId: 0, range: { tl: { col: 1, row: 1 }, br: { col: 3, row: 5 } } },
+      { imageId: 1, range: { tl: { col: 5, row: 5 }, ext: { width: 100, height: 50 } } },
+    ]);
+
+    const image0 = back.getImage(data.images[0]?.imageId ?? -1);
+    expect(image0?.extension).toBe("png");
+    expect([...(image0?.buffer ?? [])]).toEqual([...png]);
+
+    const image1 = back.getImage(data.images[1]?.imageId ?? -1);
+    expect(image1?.extension).toBe("gif");
+    expect([...(image1?.buffer ?? [])]).toEqual([...gif]);
+  });
+
+  it("shares one registry image across two sheets that both anchor it", () => {
+    const wb = new Workbook();
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    const id = wb.addImage({ buffer: png, extension: "png" });
+    wb.addWorksheet("One").addImage(id, "A1:B2");
+    wb.addWorksheet("Two").addImage(id, "C3:D4");
+
+    const back = readWorkbookBuffer(writeWorkbookBuffer(wb));
+    const one = back.getWorksheet("One");
+    const two = back.getWorksheet("Two");
+    if (!one || !two) throw new Error("sheets missing");
+
+    const oneImageId = one.images[0]?.imageId;
+    const twoImageId = two.images[0]?.imageId;
+    expect(oneImageId).toBe(twoImageId);
+    expect(back.getImage(oneImageId ?? -1)?.extension).toBe("png");
+  });
+
+  it("leaves an image-free workbook with no images on read-back (regression)", () => {
+    const back = readWorkbookBuffer(writeWorkbookBuffer(fixture()));
+    expect(back.getWorksheet("Data")?.images).toEqual([]);
+  });
+});
+
 describe("read path — typed errors", () => {
   it("throws InvalidPackageError on a truncated/corrupt zip", () => {
     expect(() => readWorkbookBuffer(new Uint8Array([1, 2, 3, 4, 5]))).toThrow(InvalidPackageError);

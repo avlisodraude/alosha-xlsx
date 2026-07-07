@@ -566,3 +566,83 @@ describe("compat parity — conditional formatting (cellIs highlight + colorScal
     );
   });
 });
+
+// --- embedded images (IMAGES-DRAWINGS-SPEC.md §4) --------------------------------------------------
+//
+// Images sit outside the cell-sampling corpus for the same reason comments and CF do: they aren't
+// cell values. Real exceljs's own `getImages()` returns each anchor's `tl`/`br` as `Anchor` class
+// instances (not plain `{col,row}`), exposing the position under `nativeCol`/`nativeRow` —
+// deliberately the same naming this repo's own `CellPosition` uses — so the sample below reads those
+// fields rather than `.col`/`.row`.
+
+interface ImageSample {
+  extension: string;
+  bufferHex: string;
+  tl: { col: number; row: number };
+  br?: { col: number; row: number };
+  ext?: { width: number; height: number };
+}
+
+function sampleImages(wb: AnyWorkbook, sheetName: string): ImageSample[] {
+  const media = wb.model.media as Array<{ extension: string; buffer: Buffer }>;
+  const ws = wb.getWorksheet(sheetName);
+  const images = ws.getImages() as Array<{ imageId: number; range: AnyWorkbook }>;
+  return images.map(({ imageId, range }) => {
+    const m = media[imageId] as { extension: string; buffer: Buffer };
+    const sample: ImageSample = {
+      extension: m.extension,
+      bufferHex: Buffer.from(m.buffer).toString("hex"),
+      tl: { col: range.tl.nativeCol, row: range.tl.nativeRow },
+    };
+    if (range.br) sample.br = { col: range.br.nativeCol, row: range.br.nativeRow };
+    if (range.ext) sample.ext = { width: range.ext.width, height: range.ext.height };
+    return sample;
+  });
+}
+
+describe("compat parity — embedded images", () => {
+  it("a two-cell anchor and a one-cell/ext anchor match real exceljs after reload, bytes intact", async (ctx) => {
+    const RealExcelJS = await loadRealExceljs();
+    if (!RealExcelJS) {
+      ctx.skip();
+      return;
+    }
+    const CompatExcelJS = await loadCompatExceljs();
+
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const gif = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]);
+
+    const build: Build = (wb) => {
+      const ws = wb.addWorksheet("Sheet1");
+      const pngId = wb.addImage({ extension: "png", buffer: png });
+      const gifId = wb.addImage({ extension: "gif", buffer: gif });
+      ws.addImage(pngId, "B2:D6");
+      ws.addImage(gifId, { tl: { col: 5, row: 5 }, ext: { width: 100, height: 50 } });
+    };
+
+    const real = new RealExcelJS.Workbook();
+    build(real);
+    const bufReal = (await real.xlsx.writeBuffer()) as Uint8Array;
+
+    const compat = new CompatExcelJS.Workbook();
+    build(compat);
+    const bufCompat = (await compat.xlsx.writeBuffer()) as Uint8Array;
+
+    const loadedReal = new RealExcelJS.Workbook();
+    await loadedReal.xlsx.load(Buffer.from(bufReal));
+    const loadedCompat = new RealExcelJS.Workbook();
+    await loadedCompat.xlsx.load(Buffer.from(bufCompat));
+
+    expect(sampleImages(loadedCompat, "Sheet1")).toEqual(sampleImages(loadedReal, "Sheet1"));
+
+    // Our own reader recovers both images too, with byte-identical buffers and resolved anchors.
+    const ours = readWorkbookBuffer(bufCompat);
+    const oursWs = ours.getWorksheet("Sheet1");
+    expect(oursWs?.images).toEqual([
+      { imageId: 0, range: { tl: { col: 1, row: 1 }, br: { col: 3, row: 5 } } },
+      { imageId: 1, range: { tl: { col: 5, row: 5 }, ext: { width: 100, height: 50 } } },
+    ]);
+    expect(ours.getImage(0)).toEqual({ buffer: png, extension: "png" });
+    expect(ours.getImage(1)).toEqual({ buffer: gif, extension: "gif" });
+  });
+});

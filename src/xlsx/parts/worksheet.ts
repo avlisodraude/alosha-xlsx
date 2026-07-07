@@ -31,7 +31,8 @@ import type { SharedStrings } from "../shared-strings.js";
 import type { Styles } from "../styles.js";
 import { type CommentRecord, renderComments } from "./comments.js";
 import type { WorksheetRel } from "./constants.js";
-import { CONTENT_TYPE, NS, REL_TYPE } from "./constants.js";
+import { CONTENT_TYPE, IMAGE_CONTENT_TYPE, NS, REL_TYPE } from "./constants.js";
+import { type DrawingImage, renderDrawing } from "./drawing.js";
 import { renderVmlDrawing } from "./vml-drawing.js";
 import { renderWorksheetRels } from "./worksheet-rels.js";
 
@@ -133,8 +134,9 @@ export function renderWorksheet(ws: Worksheet, ctx: WorksheetContext): RenderedW
   renderConditionalFormatting(w, model.conditionalFormattings, ctx);
   renderDataValidations(w, model.dataValidations);
   renderHyperlinks(w, hyperlinks, alloc);
-  // `<legacyDrawing>` is the last child (CT_Worksheet: `…drawing, legacyDrawing`), so comments run
-  // after hyperlinks — their rels take rIds after any hyperlink rels too.
+  // CT_Worksheet order: `<drawing>` comes after `<hyperlinks>`, then `<legacyDrawing>` last — so
+  // images render before comments (whose VML anchor is the `<legacyDrawing>` child).
+  renderImages(w, ws, alloc, extraParts, ctx.sheetNumber);
   renderSheetComments(w, model.comments, ctx, alloc, extraParts);
 
   w.close("worksheet");
@@ -639,4 +641,65 @@ function renderSheetComments(
 
   // The `<legacyDrawing>` points at the VML, not the comments part.
   w.leaf("legacyDrawing", { "r:id": vmlRId });
+}
+
+/** Emit `<drawing r:id>` and contribute the sheet's drawing part, its `.rels`, and the raw media
+ *  bytes (Track D, docs/IMAGES-DRAWINGS-SPEC.md §2). The sheet's `SheetRelAllocator` hands out the one
+ *  rId backing `<drawing r:id>`→`drawing{n}.xml`; each placed image then draws a *drawing-local* rId
+ *  (`rId1, rId2, …`, a separate namespace) that is both the `<a:blip r:embed>` value and the `Id` of the
+ *  image `<Relationship>` in `drawing{n}.xml.rels`. Media bytes and their format come from the workbook
+ *  image registry; the workbook-unique `k` in `media/image{k}.{ext}` is the registry's `imageId + 1`. */
+function renderImages(
+  w: XmlWriter,
+  ws: Worksheet,
+  alloc: SheetRelAllocator,
+  extraParts: ExtraPart[],
+  sheetNumber: number | undefined,
+): void {
+  const images = ws.model.images;
+  if (!images || images.length === 0) return;
+
+  // `sheetNumber` is set by the orchestrator per sheet; the fallback covers isolated part tests.
+  const n = sheetNumber ?? 1;
+
+  // One worksheet rel for the drawing part; its rId backs `<drawing r:id>`.
+  const drawingRId = alloc.next();
+  alloc.rels.push({
+    rId: drawingRId,
+    type: REL_TYPE.drawing,
+    target: `../drawings/drawing${n}.xml`,
+  });
+  w.leaf("drawing", { "r:id": drawingRId });
+
+  // Per-image: a drawing-local embed rId (r:embed ↔ the drawing rels Id) + the media part.
+  const anchors: DrawingImage[] = [];
+  const drawingRels: WorksheetRel[] = [];
+  images.forEach((img, i) => {
+    const embedId = `rId${i + 1}`;
+    const registered = ws.workbook.getImage(img.imageId);
+    // Skip a placement whose registry entry is missing (defensive; the model keeps them in lockstep).
+    if (!registered) return;
+    const ext = registered.extension;
+    const k = img.imageId + 1;
+    const mediaTarget = `../media/image${k}.${ext}`;
+
+    anchors.push({ embedId, anchor: img.range });
+    drawingRels.push({ rId: embedId, type: REL_TYPE.image, target: mediaTarget });
+    extraParts.push({
+      path: `xl/media/image${k}.${ext}`,
+      data: registered.buffer,
+      defaultFor: { extension: ext, contentType: IMAGE_CONTENT_TYPE[ext] },
+    });
+  });
+
+  // The drawing XML (Override) + its own `.rels` (plain string, covered by the `rels` Default).
+  extraParts.push({
+    path: `xl/drawings/drawing${n}.xml`,
+    data: renderDrawing(anchors),
+    contentType: CONTENT_TYPE.drawing,
+  });
+  extraParts.push({
+    path: `xl/drawings/_rels/drawing${n}.xml.rels`,
+    data: renderWorksheetRels(drawingRels),
+  });
 }

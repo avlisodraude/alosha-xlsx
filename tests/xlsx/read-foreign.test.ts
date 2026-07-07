@@ -319,3 +319,32 @@ describe("read foreign — panes + auto-filter", () => {
     expect(ws.autoFilter).toBe("A1:D1");
   });
 });
+
+describe("read foreign — embedded images", () => {
+  it("recovers a two-cell-anchored image written by exceljs, bytes intact", async (ctx) => {
+    const ExcelJS = await loadExcelJS();
+    if (!ExcelJS) {
+      ctx.skip();
+      return;
+    }
+
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const src = new ExcelJS.Workbook();
+    const sheet = src.addWorksheet("Pictured");
+    const imageId = src.addImage({ extension: "png", buffer: Buffer.from(png) });
+    sheet.addImage(imageId, "B2:D6");
+
+    const buffer = await src.xlsx.writeBuffer();
+    const bytes = new Uint8Array(buffer as ArrayBuffer);
+
+    const wb = readWorkbookBuffer(bytes);
+    const ws = wb.getWorksheet("Pictured");
+    expect(ws).toBeDefined();
+    if (!ws) return;
+
+    expect(ws.images).toEqual([
+      { imageId: 0, range: { tl: { col: 1, row: 1 }, br: { col: 3, row: 5 } } },
+    ]);
+    expect(wb.getImage(0)).toEqual({ buffer: png, extension: "png" });
+  });
+});

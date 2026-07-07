@@ -12,9 +12,15 @@
 //      `applyExcelJsStyle` — ExcelJS whole-object-per-category precedence (§4).
 //   3. `worksheet.autoFilter =` accepts ExcelJS's `{from,to}` object form (each an address string or
 //      `{row,column}`) and normalizes it to our `"A1:D1"` range string (PANES-AUTOFILTER-SPEC §4).
-//   4. the deferred surface (§6: stream/csv/images/tables/conditional-formatting/comments/
+//   4. the deferred surface (§6: stream/csv/tables/conditional-formatting/comments/
 //      defined-names/protection) throws `UnsupportedFeatureError` at the exact call, naming the
 //      feature, rather than silently no-op'ing.
+//
+// `workbook.addImage`/`getImage`/`images`, `worksheet.addImage`/`getImages` (IMAGES-DRAWINGS-SPEC.md
+// §4) route straight to the core registry — ExcelJS's `{buffer}` image form and its three anchor
+// shapes (`"B2:D6"` string / `{tl,br}` / `{tl,ext}`) already match the core `ImageAnchor` type, so no
+// bridging is needed beyond documenting the unsupported `{base64}`/`{filename}` inputs and the
+// permanently-stubbed `worksheet.addBackgroundImage` (header/footer images are out of scope, §0).
 //
 // Everything else — `addRow(array | object)`, `row.values` (1-based, empty `[0]`), `worksheet.columns
 // = [{header, key, width}]`, the `workbook.xlsx.*` I/O accessor, `cell.dataValidation` and
@@ -35,6 +41,7 @@ import {
   CellType,
   type Comment,
   type ConditionalFormatting,
+  type ImageExtension,
   type RichTextRun,
   type Style,
 } from "../model/index.js";
@@ -84,9 +91,6 @@ const DEFINED_NAMES_STUB = stubNamespace("workbook.definedNames", [
 
 /** Worksheet methods that don't exist in the core model and must fail loud in compat mode. */
 const WORKSHEET_UNSUPPORTED = new Set([
-  "addImage",
-  "getImages",
-  "addBackgroundImage",
   "addTable",
   "getTable",
   "getTables",
@@ -297,6 +301,34 @@ function toExcelJsNote(comment: Comment | undefined): unknown {
   return comment.author === undefined ? { texts } : { texts, author: comment.author };
 }
 
+// --- images (IMAGES-DRAWINGS-SPEC.md §4) ---------------------------------------------------------
+
+/** ExcelJS's `Image` input to `workbook.addImage`: `{extension, buffer}` / `{base64}` / `{filename}`.
+ *  The core registry only interns raw bytes, so only the `buffer` form is bridged — `base64` and
+ *  `filename` are documented-unsupported inputs (fail loud rather than silently drop the image). */
+function toAddImageOptions(image: unknown): { buffer: Uint8Array; extension: ImageExtension } {
+  const img = image as {
+    extension: ImageExtension;
+    buffer?: Uint8Array;
+    base64?: string;
+    filename?: string;
+  };
+  if (img.buffer !== undefined) return { buffer: img.buffer, extension: img.extension };
+  if (img.base64 !== undefined) {
+    throw new UnsupportedFeatureError("workbook.addImage({ base64 })", COMPAT_DEFER);
+  }
+  if (img.filename !== undefined) {
+    throw new UnsupportedFeatureError("workbook.addImage({ filename })", COMPAT_DEFER);
+  }
+  throw new UnsupportedFeatureError("workbook.addImage (missing buffer)", COMPAT_DEFER);
+}
+
+/** ExcelJS's `workbook.addImage`/`getImage` return the interned image with a `type: "image"` tag
+ *  appended (`lib/doc/workbook.js`); mirror that shape so compat callers see the same fields. */
+function toExcelJsMedia(image: { buffer: Uint8Array; extension: ImageExtension }): unknown {
+  return { type: "image", ...image };
+}
+
 // --- the per-level proxies ----------------------------------------------------------------------
 
 function proxyCell(cell: Cell): Cell {
@@ -398,6 +430,17 @@ function proxyWorksheet(worksheet: Worksheet): Worksheet {
       if (typeof prop === "string" && WORKSHEET_UNSUPPORTED.has(prop)) {
         return thrower(`worksheet.${prop}`);
       }
+      // `addImage(imageId, anchor)` needs no bridging — ExcelJS's `"B2:D6"` string / `{tl,br}` /
+      // `{tl,ext}` anchor forms already match the core `ImageAnchor` type, so it falls through to the
+      // default `reflectGet` below. `getImages()` has no core equivalent method (only the `images`
+      // getter), so it's reshaped here into ExcelJS's `{type,imageId,range}[]` array.
+      if (prop === "getImages") {
+        return () =>
+          target.images.map((img) => ({ type: "image", imageId: img.imageId, range: img.range }));
+      }
+      // Header/footer images are out of scope (IMAGES-DRAWINGS-SPEC.md §0) — a permanent, documented
+      // stub rather than a "not yet" deferral.
+      if (prop === "addBackgroundImage") return thrower("worksheet.addBackgroundImage");
       // §4 colour-shape bridge: ExcelJS passes colorScale/dataBar colours as `{argb}` objects; the
       // core model stores a bare ARGB string. Normalize on the way in, denormalize on the way out
       // (so a read with no write/read round trip still reports the ExcelJS shape).
@@ -470,10 +513,16 @@ function proxyWorkbook(workbook: Workbook): Workbook {
       }
       if (prop === "csv") return CSV_STUB;
       if (prop === "definedNames") return DEFINED_NAMES_STUB;
-      if (prop === "addImage" || prop === "getImage") return thrower(`workbook.${prop}`);
-      if (prop === "media") {
-        throw new UnsupportedFeatureError("workbook.media (images)", COMPAT_DEFER);
+      if (prop === "addImage") {
+        return (image: unknown) => target.addImage(toAddImageOptions(image));
       }
+      if (prop === "getImage") {
+        return (id: number) => {
+          const image = target.getImage(id);
+          return image === undefined ? undefined : toExcelJsMedia(image);
+        };
+      }
+      if (prop === "media") return target.images.map(toExcelJsMedia);
       return reflectGet(target, prop);
     },
     set(target, prop, value) {
