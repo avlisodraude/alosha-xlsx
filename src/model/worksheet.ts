@@ -18,6 +18,7 @@ import {
 import type { Cell } from "./cell.js";
 import type { CellValue } from "./cell-value.js";
 import { Column, type ColumnDefn, type ColumnRange } from "./column.js";
+import type { ConditionalFormatting } from "./conditional-formatting.js";
 import { type DataValidationModel, DataValidations } from "./data-validation.js";
 import { CellType } from "./enums.js";
 import { Row, type RowModel } from "./row.js";
@@ -79,6 +80,8 @@ export interface WorksheetModel {
   rows: RowModel[];
   merges: string[];
   dataValidations?: DataValidationModel[];
+  /** `<conditionalFormatting>` blocks: one entry per `ref`, each carrying its ordered rules. */
+  conditionalFormattings?: ConditionalFormatting[];
   /** `<autoFilter ref="…">`, an A1 range like `"A1:D1"`. */
   autoFilter?: string;
   pageSetup?: unknown;
@@ -153,6 +156,8 @@ export class Worksheet implements WorksheetHost {
   private readonly _merges = new Map<string, Range>();
   /** Data validations keyed by `sqref`; reached by cells through `WorksheetHost`. */
   private readonly _dataValidations = new DataValidations();
+  /** Conditional-formatting blocks in insertion order (sheet-level, not cell-routed). */
+  private _conditionalFormattings: ConditionalFormatting[] = [];
 
   constructor(workbook: Workbook, id: number, name: string, orderNo: number) {
     this.workbook = workbook;
@@ -548,6 +553,32 @@ export class Worksheet implements WorksheetHost {
     return this._dataValidations;
   }
 
+  // --- conditional formatting -------------------------------------------------------------------
+
+  /** The worksheet's conditional-formatting blocks, in insertion order. */
+  get conditionalFormattings(): ConditionalFormatting[] {
+    return this._conditionalFormattings;
+  }
+
+  /**
+   * Register a `{ ref, rules }` block (ExcelJS shape). `ref` is validated through the `Range` decoder
+   * — a malformed range throws a typed {@link InvalidRangeError}, never a bare `TypeError`.
+   */
+  addConditionalFormatting(cf: ConditionalFormatting): ConditionalFormatting {
+    for (const part of cf.ref.trim().split(/\s+/)) {
+      if (part === "") continue;
+      // Constructing a Range validates the fragment and throws InvalidRangeError on garbage.
+      new Range(part);
+    }
+    this._conditionalFormattings.push(cf);
+    return cf;
+  }
+
+  /** Drop every conditional-formatting block whose `ref` matches (exact-string comparison). */
+  removeConditionalFormatting(ref: string): void {
+    this._conditionalFormattings = this._conditionalFormattings.filter((cf) => cf.ref !== ref);
+  }
+
   get dimensions(): Range {
     let top = Number.POSITIVE_INFINITY;
     let left = Number.POSITIVE_INFINITY;
@@ -583,6 +614,12 @@ export class Worksheet implements WorksheetHost {
     };
     if (columns) m.columns = columns;
     if (this._dataValidations.size > 0) m.dataValidations = this._dataValidations.model;
+    if (this._conditionalFormattings.length > 0) {
+      m.conditionalFormattings = this._conditionalFormattings.map((cf) => ({
+        ref: cf.ref,
+        rules: cf.rules.map((r) => ({ ...r })),
+      }));
+    }
     if (this.autoFilter !== undefined) m.autoFilter = this.autoFilter;
     if (this.pageSetup !== undefined) m.pageSetup = this.pageSetup;
     if (this.headerFooter !== undefined) m.headerFooter = this.headerFooter;
@@ -605,6 +642,10 @@ export class Worksheet implements WorksheetHost {
     this._columnsByKey.clear();
     this._merges.clear();
     this._dataValidations.model = m.dataValidations ?? [];
+    this._conditionalFormattings = (m.conditionalFormattings ?? []).map((cf) => ({
+      ref: cf.ref,
+      rules: cf.rules.map((r) => ({ ...r })),
+    }));
 
     if (m.columns) {
       const cols = Column.fromModel(this, m.columns) ?? [];

@@ -13,6 +13,23 @@ export { detectType, effectiveType, fromStored, toCsv, toStored, toText } from "
 export type { ColumnDefn, ColumnRange } from "./column.js";
 export { Column, DEFAULT_COLUMN_WIDTH } from "./column.js";
 export type {
+  CfAverage,
+  CfCellIs,
+  CfColor,
+  CfColorScale,
+  CfDataBar,
+  CfDuplicate,
+  CfExpression,
+  CfIconSet,
+  CfOperator,
+  CfRuleBase,
+  CfText,
+  CfTop10,
+  CfValueObject,
+  ConditionalFormatting,
+  ConditionalRule,
+} from "./conditional-formatting.js";
+export type {
   DataValidation,
   DataValidationErrorStyle,
   DataValidationModel,
