@@ -117,11 +117,13 @@ functions accept a `ReadOptions` (reserved for future use).
 | Row height / styles / outline levels | ✅ | ✅ | |
 | Multiple worksheets, sheet state (visible / hidden / veryHidden) | ✅ | ✅ | |
 | Workbook & sheet views (freeze/split, zoom, active tab) | ✅ | ✅ | round-trip as data |
+| Sheet auto-filter range | ✅ | ✅ | `ref` range only; filter criteria/sort state deferred |
 | Workbook metadata (creator, dates, title, …) | ✅ | ✅ | |
 | Hyperlink cells (external URL/mailto) | ✅ | ✅ | real OOXML relationship, round-trips as `{ text, hyperlink, tooltip? }`; internal `location=` links deferred |
+| Data validation (dropdowns, constraints) | ✅ | ✅ | same-sheet ranges and inline lists; cross-sheet list refs deferred |
 | Streaming read/write | ❌ | ❌ | deferred |
 | Drawings / images / charts | ❌ | ❌ | deferred |
-| Data validation, conditional formatting, comments | ❌ | ❌ | deferred |
+| Conditional formatting, comments | ❌ | ❌ | deferred |
 
 ## Migrating from ExcelJS
 

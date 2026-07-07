@@ -10,7 +10,7 @@
 // A `<f>` present makes it a formula cell whose cached `<v>` becomes the typed `result`.
 
 import { decodeAddress } from "../../address/index.js";
-import { InvalidCellValueError } from "../../errors.js";
+import { InvalidCellValueError, InvalidPaneError } from "../../errors.js";
 import {
   type CellError,
   type CellValue,
@@ -23,6 +23,7 @@ import {
   type RichText,
   type Row,
   type Worksheet,
+  type WorksheetView,
 } from "../../model/index.js";
 import { cursor, localName, type XmlCursor, type XmlEvent } from "../../xml/index.js";
 import { serialToDate } from "../date.js";
@@ -70,11 +71,18 @@ export function parseWorksheet(ws: Worksheet, xml: string, ctx: WorksheetReadCon
 
   c.eachChild(ev.name, (child) => {
     switch (localName(child.name)) {
+      case "sheetViews":
+        if (!child.selfClosing) parseSheetViews(c, child.name, ws);
+        break;
       case "cols":
         if (!child.selfClosing) parseCols(c, child.name, ws, ctx);
         break;
       case "sheetData":
         if (!child.selfClosing) parseSheetData(c, child.name, ws, ctx);
+        break;
+      case "autoFilter":
+        if (child.attrs.ref !== undefined) ws.autoFilter = child.attrs.ref;
+        if (!child.selfClosing) c.textUntilClose(child.name);
         break;
       case "mergeCells":
         if (!child.selfClosing) collectMerges(c, child.name, merges);
@@ -95,6 +103,69 @@ export function parseWorksheet(ws: Worksheet, xml: string, ctx: WorksheetReadCon
   if (ctx.rels) {
     for (const link of hyperlinks) applyHyperlink(ws, link, ctx.rels);
   }
+}
+
+/** Inverse of `renderSheetViews` (src/xlsx/parts/worksheet.ts): reads the sheet's single `<sheetView>`
+ *  — `showGridLines="0"` and an optional `<pane>` child — into `views[0]`. A bare `<sheetView
+ *  workbookViewId="0"/>` with no `<pane>` and no non-default attrs leaves `views` empty; a foreign file
+ *  with more than one `<sheetView>` only keeps the first (our model carries a single view). */
+function parseSheetViews(c: XmlCursor, container: string, ws: Worksheet): void {
+  let seenSheetView = false;
+  c.eachChild(container, (sheetViewEl) => {
+    if (localName(sheetViewEl.name) !== "sheetView") {
+      if (!sheetViewEl.selfClosing) c.textUntilClose(sheetViewEl.name);
+      return;
+    }
+    if (seenSheetView) {
+      if (!sheetViewEl.selfClosing) c.textUntilClose(sheetViewEl.name);
+      return;
+    }
+    seenSheetView = true;
+
+    const view: WorksheetView = {};
+    if (sheetViewEl.attrs.showGridLines === "0") view.showGridLines = false;
+
+    if (!sheetViewEl.selfClosing) {
+      c.eachChild(sheetViewEl.name, (child) => {
+        if (localName(child.name) === "pane") {
+          Object.assign(view, parsePane(child));
+          if (!child.selfClosing) c.textUntilClose(child.name);
+        } else if (!child.selfClosing) {
+          c.textUntilClose(child.name);
+        }
+      });
+    }
+
+    if (Object.keys(view).length > 0) ws.views = [view];
+  });
+}
+
+/** Parse a `<pane>` element into the fields `renderSheetViews` emits: `state` verbatim, `xSplit`/
+ *  `ySplit` coerced to numbers (absent attrs dropped, never materialised as `0`), `topLeftCell`/
+ *  `activePane` copied through. A present-but-non-numeric split throws {@link InvalidPaneError} rather
+ *  than silently producing `NaN`. */
+function parsePane(paneEl: OpenEvent): WorksheetView {
+  const view: WorksheetView = {};
+  if (paneEl.attrs.state !== undefined) {
+    view.state = paneEl.attrs.state as WorksheetView["state"];
+  }
+  const xSplit = paneNum(paneEl.attrs.xSplit, "xSplit");
+  if (xSplit !== undefined) view.xSplit = xSplit;
+  const ySplit = paneNum(paneEl.attrs.ySplit, "ySplit");
+  if (ySplit !== undefined) view.ySplit = ySplit;
+  if (paneEl.attrs.topLeftCell !== undefined) view.topLeftCell = paneEl.attrs.topLeftCell;
+  if (paneEl.attrs.activePane !== undefined) {
+    view.activePane = paneEl.attrs.activePane as WorksheetView["activePane"];
+  }
+  return view;
+}
+
+/** Parse a `<pane>` numeric attribute; `undefined` when absent, thrown when present but not finite. */
+function paneNum(val: string | undefined, attr: "xSplit" | "ySplit"): number | undefined {
+  if (val === undefined) return undefined;
+  const n = Number(val);
+  if (!Number.isFinite(n)) throw new InvalidPaneError(attr, val);
+  return n;
 }
 
 function parseCols(

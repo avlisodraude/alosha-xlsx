@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.6.0
+
+### Minor Changes
+
+- Freeze/split panes and sheet auto-filter (write + read + compat).
+
+  Worksheets can now carry a single `<sheetView>` with a `<pane>` — `views = [{ state: "frozen" |
+"split", xSplit?, ySplit?, topLeftCell?, activePane?, showGridLines? }]` — and a sheet-level
+  `autoFilter` range (`"A1:D1"`).
+
+  - **Model.** `WorksheetView` and `worksheet.autoFilter` round-trip through `WorksheetModel` like
+    merges and column widths.
+  - **Write.** `<pane>` is emitted inside `<sheetView>`, and `<autoFilter ref="…">` after
+    `<sheetData>`/before `<mergeCells>`, matching CT_Worksheet element order.
+  - **Read.** Both invert back to an equal model; a malformed `<pane>` (e.g. a non-numeric `xSplit`)
+    raises a typed `AloshaXlsxError` instead of `NaN`.
+  - **Compat.** `@alosha/xlsx/compat`'s `worksheet.views` and `worksheet.autoFilter` are a real
+    pass-through — the core field names already match ExcelJS's. The one bridge: setting
+    `worksheet.autoFilter` to ExcelJS's `{ from, to }` object form (each an address string or
+    `{ row, column }`) normalizes to our `"A1:D1"` range string before it reaches the core.
+
+  **Deferred:** multiple views per sheet, `<selection>`, per-pane active-cell tracking, split-window
+  zoom, and auto-filter criteria/sort state (`<filterColumn>`, `<sortState>`) — only the `ref` range
+  persists, matching where ExcelJS's basic `autoFilter` sits.
+
 ## 0.5.0
 
 ### Minor Changes

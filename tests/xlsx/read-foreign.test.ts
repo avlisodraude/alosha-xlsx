@@ -184,3 +184,30 @@ describe("read foreign — data validations", () => {
     });
   });
 });
+
+describe("read foreign — panes + auto-filter", () => {
+  it("recovers a frozen pane and auto-filter range written by exceljs", async (ctx) => {
+    const ExcelJS = await loadExcelJS();
+    if (!ExcelJS) {
+      ctx.skip();
+      return;
+    }
+
+    const src = new ExcelJS.Workbook();
+    const sheet = src.addWorksheet("Frozen");
+    sheet.views = [{ state: "frozen", xSplit: 1, ySplit: 1, topLeftCell: "B2" }];
+    sheet.autoFilter = "A1:D1";
+    sheet.getCell("A1").value = "header";
+
+    const buffer = await src.xlsx.writeBuffer();
+    const bytes = new Uint8Array(buffer as ArrayBuffer);
+
+    const wb = readWorkbookBuffer(bytes);
+    const ws = wb.getWorksheet("Frozen");
+    expect(ws).toBeDefined();
+    if (!ws) return;
+
+    expect(ws.views[0]).toMatchObject({ state: "frozen", xSplit: 1, ySplit: 1, topLeftCell: "B2" });
+    expect(ws.autoFilter).toBe("A1:D1");
+  });
+});
