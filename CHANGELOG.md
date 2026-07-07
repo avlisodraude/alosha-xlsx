@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.4.0
+
+### Minor Changes
+
+- Persist external cell hyperlinks as real OOXML relationships (write + read + compat).
+
+  Setting a `{ text, hyperlink, tooltip? }` cell value now writes a proper worksheet
+  `<hyperlinks>` record plus an external relationship in
+  `xl/worksheets/_rels/sheetN.xml.rels`, so the link is clickable in Excel/LibreOffice and
+  survives a round-trip — instead of degrading to its plain display text. External
+  `http(s)` and `mailto:` targets are supported; the display text still renders as an
+  ordinary string cell.
+
+  - **Write.** Hyperlink cells emit a `<hyperlinks>` block (after `<mergeCells>`) with
+    worksheet-local `r:id`s and a matching `.rels` part.
+  - **Read.** The `<hyperlinks>` block is resolved against the worksheet's own rels, so
+    hyperlink cells parse back to `{ text, hyperlink, tooltip? }` with `CellType.Hyperlink`.
+  - **Compat.** No API change — `@alosha/xlsx/compat` hyperlink cells now round-trip, and
+    `cell.type` is `ValueType.Hyperlink` (5).
+
+  **Behaviour change (why this is a minor):** reading a workbook that contains hyperlinks now
+  yields a `{ text, hyperlink }` cell value with `CellType.Hyperlink` (compat:
+  `ValueType.Hyperlink`), where 0.3.x returned a plain **string**. Code that read hyperlink
+  cells expecting a string will now receive an object.
+
+  Internal in-workbook (`location="Sheet2!A1"`) hyperlinks remain deferred; the previous
+  "hyperlink cells round-trip as their display text" known limitation is removed from the
+  README and `docs/MIGRATION.md` in favour of that narrower note.
+
 ## 0.3.1
 
 ### Patch Changes
