@@ -233,6 +233,23 @@ describe("read round-trip — data validations", () => {
   });
 });
 
+describe("read round-trip — panes & auto-filter", () => {
+  it("persists a frozen pane and an auto-filter range together", () => {
+    const wb = new Workbook();
+    const ws = wb.addWorksheet("Panes");
+    ws.getCell("A1").value = "Header";
+    ws.views = [{ state: "frozen", xSplit: 1, ySplit: 1, topLeftCell: "B2" }];
+    ws.autoFilter = "A1:C1";
+
+    const back = readWorkbookBuffer(writeWorkbookBuffer(wb));
+    const data = back.getWorksheet("Panes");
+    if (!data) throw new Error("Panes sheet missing");
+
+    expect(data.views).toEqual([{ state: "frozen", xSplit: 1, ySplit: 1, topLeftCell: "B2" }]);
+    expect(data.autoFilter).toBe("A1:C1");
+  });
+});
+
 describe("read path — typed errors", () => {
   it("throws InvalidPackageError on a truncated/corrupt zip", () => {
     expect(() => readWorkbookBuffer(new Uint8Array([1, 2, 3, 4, 5]))).toThrow(InvalidPackageError);

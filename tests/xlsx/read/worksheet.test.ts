@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isAloshaXlsxError } from "../../../src/errors.js";
+import { InvalidPaneError, isAloshaXlsxError } from "../../../src/errors.js";
 import {
   CellType,
   type RichText,
@@ -757,5 +757,100 @@ describe("parseWorksheet — data validations", () => {
       ),
     ).not.toThrow();
     expect(s.dataValidations.find("A1")).toBeUndefined();
+  });
+});
+
+// --- <sheetViews>/<pane> reconstruction (PANES-AUTOFILTER-SPEC §3) ------------------------------------
+
+describe("parseWorksheet — sheetViews / panes", () => {
+  it("leaves views empty for a bare <sheetView> (default, golden)", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(`<sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetData/>`),
+      ctx(),
+    );
+    expect(s.views).toEqual([]);
+  });
+
+  it("parses a frozen pane (golden)", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<sheetViews><sheetView workbookViewId="0">` +
+          `<pane xSplit="1" ySplit="1" topLeftCell="B2" state="frozen"/>` +
+          `</sheetView></sheetViews><sheetData/>`,
+      ),
+      ctx(),
+    );
+    expect(s.views).toEqual([{ state: "frozen", xSplit: 1, ySplit: 1, topLeftCell: "B2" }]);
+  });
+
+  it("parses a split pane with activePane (golden)", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<sheetViews><sheetView workbookViewId="0">` +
+          `<pane xSplit="2000" ySplit="3000" topLeftCell="C4" activePane="bottomRight" state="split"/>` +
+          `</sheetView></sheetViews><sheetData/>`,
+      ),
+      ctx(),
+    );
+    expect(s.views).toEqual([
+      { state: "split", xSplit: 2000, ySplit: 3000, topLeftCell: "C4", activePane: "bottomRight" },
+    ]);
+  });
+
+  it("reads showGridLines=false off the sheetView even with no pane", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(`<sheetViews><sheetView workbookViewId="0" showGridLines="0"/></sheetViews><sheetData/>`),
+      ctx(),
+    );
+    expect(s.views).toEqual([{ showGridLines: false }]);
+  });
+
+  it("throws InvalidPaneError for a non-numeric xSplit, never a silent NaN", () => {
+    const s = sheet();
+    expect(() =>
+      parseWorksheet(
+        s,
+        ws(
+          `<sheetViews><sheetView workbookViewId="0">` +
+            `<pane state="frozen" xSplit="abc"/>` +
+            `</sheetView></sheetViews><sheetData/>`,
+        ),
+        ctx(),
+      ),
+    ).toThrow(InvalidPaneError);
+  });
+});
+
+// --- <autoFilter> reconstruction (PANES-AUTOFILTER-SPEC §3) -------------------------------------------
+
+describe("parseWorksheet — autoFilter", () => {
+  it("parses <autoFilter ref> (golden)", () => {
+    const s = sheet();
+    parseWorksheet(s, ws(`<sheetData/><autoFilter ref="A1:D1"/>`), ctx());
+    expect(s.autoFilter).toBe("A1:D1");
+  });
+
+  it("tolerates filterColumn/sortState children without choking (out of scope)", () => {
+    const s = sheet();
+    expect(() =>
+      parseWorksheet(
+        s,
+        ws(
+          `<sheetData/><autoFilter ref="A1:C1">` +
+            `<filterColumn colId="0"><filters><filter val="x"/></filters></filterColumn>` +
+            `<sortState ref="A1:C1"/></autoFilter>`,
+        ),
+        ctx(),
+      ),
+    ).not.toThrow();
+    expect(s.autoFilter).toBe("A1:C1");
   });
 });

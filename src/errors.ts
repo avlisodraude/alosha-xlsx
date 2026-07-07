@@ -24,7 +24,8 @@ export type AloshaXlsxErrorCode =
   | "INVALID_ROW_NUMBER"
   | "INVALID_CELL_VALUE"
   | "UNSUPPORTED_FEATURE"
-  | "INVALID_PACKAGE";
+  | "INVALID_PACKAGE"
+  | "INVALID_PANE";
 
 /**
  * Base class for all library errors. Abstract — never thrown directly; always a concrete subclass.
@@ -203,5 +204,16 @@ export class InvalidPackageError extends AloshaXlsxError {
   readonly code = "INVALID_PACKAGE" as const;
   constructor(public readonly reason: string) {
     super(`Invalid .xlsx package: ${reason}`);
+  }
+}
+
+/** A `<pane>` element's `xSplit`/`ySplit` attribute is present but not a finite number (CT_Pane). */
+export class InvalidPaneError extends AloshaXlsxError {
+  readonly code = "INVALID_PANE" as const;
+  constructor(
+    public readonly attribute: "xSplit" | "ySplit",
+    public readonly value: string,
+  ) {
+    super(`Invalid <pane> ${attribute}: ${JSON.stringify(value)} is not a number.`);
   }
 }
