@@ -384,3 +384,107 @@ describe("compat parity — frozen pane + auto-filter", () => {
     expect(byRowColumn.autoFilter).toBe("A1:D3");
   });
 });
+
+// --- conditional formatting (CONDITIONAL-FORMATTING-SPEC.md §4) ----------------------------------
+//
+// Sheet-level like views/autoFilter, so it sits outside the cell-sampling corpus too. A cellIs
+// (highlight fill, the dxf-bearing family) + a colorScale (the {argb}-colour self-visualising
+// family) — same two-engine build-then-diff shape, diffed on the fields that survive an exceljs
+// round trip: rule type/operator/priority, the highlight fill's resolved argb, and the colorScale's
+// resolved colours. `formulae`/`cfvo` are left out of the diff — real exceljs's own reader returns a
+// cellIs formula as a string (`"5"`), not the number our own reader coerces it to, an orthogonal
+// stringly-typed-XML quirk that has nothing to do with the compat shim itself.
+
+interface CfSample {
+  ref: string;
+  type: string;
+  operator: string | undefined;
+  priority: number | undefined;
+  fillArgb: string | undefined;
+  colors: (string | undefined)[] | undefined;
+}
+
+function sampleConditionalFormattings(wb: AnyWorkbook, sheetName: string): CfSample[] {
+  const ws = wb.getWorksheet(sheetName);
+  const cfs = ws.conditionalFormattings as Array<{
+    ref: string;
+    rules: Array<{
+      type: string;
+      operator?: string;
+      priority?: number;
+      style?: { fill?: { fgColor?: { argb?: string }; bgColor?: { argb?: string } } };
+      color?: Array<{ argb?: string }>;
+    }>;
+  }>;
+  const samples: CfSample[] = [];
+  for (const cf of cfs) {
+    for (const rule of cf.rules) {
+      const fill = rule.style?.fill;
+      samples.push({
+        ref: cf.ref,
+        type: rule.type,
+        operator: rule.operator,
+        priority: rule.priority,
+        fillArgb: fill?.bgColor?.argb ?? fill?.fgColor?.argb,
+        colors: rule.color?.map((c) => c?.argb),
+      });
+    }
+  }
+  return samples;
+}
+
+describe("compat parity — conditional formatting (cellIs highlight + colorScale)", () => {
+  it("rule type/operator/priority, the highlight argb, and the colorScale colours match real exceljs", async (ctx) => {
+    const RealExcelJS = await loadRealExceljs();
+    if (!RealExcelJS) {
+      ctx.skip();
+      return;
+    }
+    const CompatExcelJS = await loadCompatExceljs();
+
+    const build: Build = (wb) => {
+      const ws = wb.addWorksheet("Sheet1");
+      ws.getCell("A1").value = 10;
+      ws.addConditionalFormatting({
+        ref: "A1:A10",
+        rules: [
+          {
+            type: "cellIs",
+            operator: "greaterThan",
+            formulae: [5],
+            priority: 1,
+            style: { fill: { type: "pattern", pattern: "solid", bgColor: { argb: "FFF8696B" } } },
+          },
+        ],
+      });
+      ws.addConditionalFormatting({
+        ref: "C1:C20",
+        rules: [
+          {
+            type: "colorScale",
+            priority: 2,
+            cfvo: [{ type: "min" }, { type: "max" }],
+            color: [{ argb: "FFF8696B" }, { argb: "FF63BE7B" }],
+          },
+        ],
+      });
+    };
+
+    const real = new RealExcelJS.Workbook();
+    build(real);
+    const bufReal = (await real.xlsx.writeBuffer()) as Uint8Array;
+
+    const compat = new CompatExcelJS.Workbook();
+    build(compat);
+    const bufCompat = (await compat.xlsx.writeBuffer()) as Uint8Array;
+
+    const loadedReal = new RealExcelJS.Workbook();
+    await loadedReal.xlsx.load(Buffer.from(bufReal));
+    const loadedCompat = new RealExcelJS.Workbook();
+    await loadedCompat.xlsx.load(Buffer.from(bufCompat));
+
+    expect(sampleConditionalFormattings(loadedCompat, "Sheet1")).toEqual(
+      sampleConditionalFormattings(loadedReal, "Sheet1"),
+    );
+  });
+});

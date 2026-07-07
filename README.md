@@ -121,9 +121,10 @@ functions accept a `ReadOptions` (reserved for future use).
 | Workbook metadata (creator, dates, title, …) | ✅ | ✅ | |
 | Hyperlink cells (external URL/mailto) | ✅ | ✅ | real OOXML relationship, round-trips as `{ text, hyperlink, tooltip? }`; internal `location=` links deferred |
 | Data validation (dropdowns, constraints) | ✅ | ✅ | same-sheet ranges and inline lists; cross-sheet list refs deferred |
+| Conditional formatting (`cellIs`, `expression`, text-contains family, `top10`, `aboveAverage`/`belowAverage`, `duplicateValues`/`uniqueValues`, `colorScale`, `dataBar`, `iconSet`) | ✅ | ✅ | differential styles dedup into a `<dxfs>` pool; x14 dataBar gradient/axis/negative-fill, `timePeriod` rules, and custom iconSet icons deferred |
 | Streaming read/write | ❌ | ❌ | deferred |
 | Drawings / images / charts | ❌ | ❌ | deferred |
-| Conditional formatting, comments | ❌ | ❌ | deferred |
+| Comments | ❌ | ❌ | deferred |
 
 ## Migrating from ExcelJS
 
@@ -142,12 +143,12 @@ behave as you'd expect. Common differences to watch for:
 - **ESM-first.** The package is ESM with a CJS fallback; prefer `import` over `require`.
 
 Not everything ExcelJS does is implemented yet — check the feature matrix and limitations before
-porting a workbook that leans on drawings, streaming, or conditional formatting.
+porting a workbook that leans on drawings, streaming, or comments.
 
 **Want a one-line import swap instead?** `@alosha/xlsx/compat` is an ExcelJS-shaped drop-in — same
 `cell.type` numbers, same style-setter precedence, same `addRow`/`row.values`/`worksheet.columns`
 behaviour — for code that shouldn't need to change beyond `import ExcelJS from "@alosha/xlsx/compat"`.
-See [`docs/MIGRATION.md`](https://github.com/avlisodraude/alosha-xlsx/blob/main/docs/MIGRATION.md) for the supported/deferred matrix and the two
+See [`docs/MIGRATION.md`](https://github.com/avlisodraude/alosha-xlsx/blob/main/docs/MIGRATION.md) for the supported/deferred matrix and the three
 behavioural notes to check before porting.
 
 ## Known limitations
@@ -159,10 +160,16 @@ behavioural notes to check before porting.
 - **No streaming.** Reading and writing are buffer-based (the whole workbook lives in memory). A
   streaming API for very large sheets is deferred.
 - **No drawings, images, or charts.** These parts are ignored on read and not emitted on write.
-- **No conditional formatting or comments** yet.
+- **No comments** yet.
 - **Data validation** (list dropdowns, whole/decimal/date/time/text-length constraints, custom
   formulas) is supported for same-sheet ranges and inline lists. A list referencing a range on
   **another sheet** (the x14/`<extLst>` form Excel uses for that case) is deferred.
+- **Conditional formatting** covers `cellIs`, `expression`, the text-contains family
+  (`containsText`/`notContainsText`/`beginsWith`/`endsWith`), `top10`, `aboveAverage`/`belowAverage`,
+  `duplicateValues`/`uniqueValues`, and the self-visualising `colorScale`/`dataBar`/`iconSet` rules,
+  with differential styles deduped into a shared `<dxfs>` pool. Deferred: the x14/`<extLst>` dataBar
+  extensions (gradient fill, axis, negative-value fill) — only the ECMA-376 baseline `<dataBar>` is
+  emitted — `timePeriod` rules, and custom `iconSet` icons.
 
 See [`BENCHMARKS.md`](https://github.com/avlisodraude/alosha-xlsx/blob/main/BENCHMARKS.md) for
 write/read throughput and output-size numbers against ExcelJS, and

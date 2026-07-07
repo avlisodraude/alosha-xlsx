@@ -185,6 +185,76 @@ describe("read foreign — data validations", () => {
   });
 });
 
+describe("read foreign — conditional formatting", () => {
+  it("recovers a cellIs highlight and a colorScale written by exceljs, dxf style and colours intact", async (ctx) => {
+    const ExcelJS = await loadExcelJS();
+    if (!ExcelJS) {
+      ctx.skip();
+      return;
+    }
+
+    const src = new ExcelJS.Workbook();
+    const sheet = src.addWorksheet("CF");
+    sheet.addConditionalFormatting({
+      ref: "A1:A10",
+      rules: [
+        {
+          type: "cellIs",
+          operator: "greaterThan",
+          formulae: [5],
+          style: { fill: { type: "pattern", pattern: "solid", bgColor: { argb: "FFF8696B" } } },
+        },
+      ],
+    });
+    sheet.addConditionalFormatting({
+      ref: "C1:C20",
+      rules: [
+        {
+          type: "colorScale",
+          cfvo: [{ type: "min" }, { type: "max" }],
+          color: [{ argb: "FFF8696B" }, { argb: "FF63BE7B" }],
+        },
+      ],
+    });
+
+    const buffer = await src.xlsx.writeBuffer();
+    const bytes = new Uint8Array(buffer as ArrayBuffer);
+
+    const wb = readWorkbookBuffer(bytes);
+    const ws = wb.getWorksheet("CF");
+    expect(ws).toBeDefined();
+    if (!ws) return;
+
+    // ExcelJS's own auto-priority (`prepare()`) numbers every unset-priority rule sequentially
+    // across all blocks in document order: the cellIs rule first (1), then the colorScale (2).
+    expect(ws.conditionalFormattings).toEqual([
+      {
+        ref: "A1:A10",
+        rules: [
+          {
+            type: "cellIs",
+            operator: "greaterThan",
+            formulae: [5],
+            priority: 1,
+            style: { fill: { type: "pattern", pattern: "solid", bgColor: { argb: "FFF8696B" } } },
+          },
+        ],
+      },
+      {
+        ref: "C1:C20",
+        rules: [
+          {
+            type: "colorScale",
+            cfvo: [{ type: "min" }, { type: "max" }],
+            color: ["FFF8696B", "FF63BE7B"],
+            priority: 2,
+          },
+        ],
+      },
+    ]);
+  });
+});
+
 describe("read foreign — panes + auto-filter", () => {
   it("recovers a frozen pane and auto-filter range written by exceljs", async (ctx) => {
     const ExcelJS = await loadExcelJS();

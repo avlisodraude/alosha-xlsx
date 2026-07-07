@@ -31,7 +31,7 @@ import { encodeAddress } from "../address/index.js";
 import { UnsupportedFeatureError } from "../errors.js";
 import type { XlsxAccessor } from "../index.js";
 import { Cell, Column, Row, Workbook, Worksheet } from "../index.js";
-import { CellType, type Style } from "../model/index.js";
+import { CellType, type ConditionalFormatting, type Style } from "../model/index.js";
 import { applyExcelJsStyle } from "./style-compat.js";
 import { toExcelJSValueType } from "./value-type.js";
 
@@ -84,8 +84,6 @@ const WORKSHEET_UNSUPPORTED = new Set([
   "addTable",
   "getTable",
   "getTables",
-  "addConditionalFormatting",
-  "removeConditionalFormatting",
   "protect",
   "unprotect",
 ]);
@@ -198,6 +196,67 @@ function normalizeAutoFilter(value: unknown): unknown {
   return value;
 }
 
+/** ExcelJS represents a `colorScale`/`dataBar` colour as `{ argb }` (mirroring its cell-style `Color`
+ *  shape); our core model stores `CfColor` as a bare ARGB string (conditional-format colours are
+ *  argb-only — no theme/indexed support). Bridge at the `addConditionalFormatting` boundary so an
+ *  ExcelJS-idiomatic call passes straight through; `argbToCfColor` is the inverse, applied when a
+ *  compat caller reads `worksheet.conditionalFormattings` back without a write/read round trip (§4
+ *  colour-shape bridge). `iconSet` never carries a colour (icons use Excel's built-in presets), so
+ *  only `colorScale`/`dataBar` need touching. */
+function cfColorToArgb(color: unknown): unknown {
+  if (color !== null && typeof color === "object" && "argb" in color) {
+    return (color as { argb?: unknown }).argb;
+  }
+  return color;
+}
+
+function argbToCfColor(argb: unknown): unknown {
+  return typeof argb === "string" ? { argb } : argb;
+}
+
+function normalizeCfRule(rule: unknown): unknown {
+  if (rule === null || typeof rule !== "object") return rule;
+  const r = rule as Record<string, unknown>;
+  if (r.type === "colorScale" && Array.isArray(r.color)) {
+    return { ...r, color: r.color.map(cfColorToArgb) };
+  }
+  if (r.type === "dataBar" && r.color !== undefined) {
+    return { ...r, color: cfColorToArgb(r.color) };
+  }
+  return rule;
+}
+
+function denormalizeCfRule(rule: unknown): unknown {
+  if (rule === null || typeof rule !== "object") return rule;
+  const r = rule as Record<string, unknown>;
+  if (r.type === "colorScale" && Array.isArray(r.color)) {
+    return { ...r, color: r.color.map(argbToCfColor) };
+  }
+  if (r.type === "dataBar" && r.color !== undefined) {
+    return { ...r, color: argbToCfColor(r.color) };
+  }
+  return rule;
+}
+
+/** Normalize one `{ ref, rules }` block passed into `addConditionalFormatting`; non-CF-shaped input
+ *  passes through untouched so a malformed call still reaches the core (and its own validation). */
+function normalizeConditionalFormatting(cf: unknown): unknown {
+  if (cf === null || typeof cf !== "object") return cf;
+  const c = cf as { rules?: unknown };
+  if (!Array.isArray(c.rules)) return cf;
+  return { ...c, rules: c.rules.map(normalizeCfRule) };
+}
+
+/** The inverse, applied to every block a compat caller reads off `worksheet.conditionalFormattings` —
+ *  clones rather than mutates, so the core's stored (normalized) blocks stay writer-ready. */
+function denormalizeConditionalFormattings(cfs: readonly ConditionalFormatting[]): unknown[] {
+  return cfs.map((cf) => {
+    const c = cf as unknown as { rules?: unknown };
+    if (!Array.isArray(c.rules)) return cf;
+    return { ...c, rules: c.rules.map(denormalizeCfRule) };
+  });
+}
+
 // --- the per-level proxies ----------------------------------------------------------------------
 
 function proxyCell(cell: Cell): Cell {
@@ -295,6 +354,20 @@ function proxyWorksheet(worksheet: Worksheet): Worksheet {
       if (prop === RAW) return target;
       if (typeof prop === "string" && WORKSHEET_UNSUPPORTED.has(prop)) {
         return thrower(`worksheet.${prop}`);
+      }
+      // §4 colour-shape bridge: ExcelJS passes colorScale/dataBar colours as `{argb}` objects; the
+      // core model stores a bare ARGB string. Normalize on the way in, denormalize on the way out
+      // (so a read with no write/read round trip still reports the ExcelJS shape).
+      if (prop === "addConditionalFormatting") {
+        return (cf: unknown) => {
+          const added = target.addConditionalFormatting(
+            normalizeConditionalFormatting(cf) as ConditionalFormatting,
+          );
+          return wrap({ ...added, rules: added.rules.map(denormalizeCfRule) });
+        };
+      }
+      if (prop === "conditionalFormattings") {
+        return denormalizeConditionalFormattings(target.conditionalFormattings);
       }
       // ExcelJS parity: default `eachRow` skips empty rows (§ MIGRATION "eachRow/eachCell").
       if (prop === "eachRow") {

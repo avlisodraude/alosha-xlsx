@@ -1,5 +1,6 @@
 import ExcelJS, { UnsupportedFeatureError, ValueType, Workbook } from "@alosha/xlsx/compat";
 import { describe, expect, it } from "vitest";
+import { readWorkbookBuffer } from "../../src/index.js";
 
 // The facade contract from COMPAT-SPEC.md §5: an ExcelJS-faithful surface over the core model. These
 // exercise the three documented divergences (cell.type numbers, whole-object style precedence,
@@ -162,17 +163,15 @@ describe("compat facade — deferred surface throws UnsupportedFeatureError (§6
     expect(() => (wb as unknown as { media: unknown }).media).toThrow(UnsupportedFeatureError);
   });
 
-  it("worksheet-level: addImage / addTable / conditional formatting / protect", () => {
+  it("worksheet-level: addImage / addTable / protect", () => {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("S") as unknown as {
       addImage: () => void;
       addTable: () => void;
-      addConditionalFormatting: () => void;
       protect: () => void;
     };
     expect(() => ws.addImage()).toThrow(UnsupportedFeatureError);
     expect(() => ws.addTable()).toThrow(UnsupportedFeatureError);
-    expect(() => ws.addConditionalFormatting()).toThrow(UnsupportedFeatureError);
     expect(() => ws.protect()).toThrow(UnsupportedFeatureError);
   });
 
@@ -234,6 +233,137 @@ describe("compat facade — data validation is a real pass-through (DATA-VALIDAT
 
     ws.dataValidations.remove("B2:B10");
     expect(ws.dataValidations.find("B5")).toBeUndefined();
+  });
+});
+
+describe("compat facade — conditional formatting colour-shape bridge (CONDITIONAL-FORMATTING-SPEC §4)", () => {
+  interface CfFacadeWorksheet {
+    addConditionalFormatting: (cf: unknown) => unknown;
+    conditionalFormattings: unknown[];
+  }
+
+  it("normalizes a colorScale's {argb} colours to bare ARGB strings before they reach the writer", async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("S") as unknown as CfFacadeWorksheet;
+
+    ws.addConditionalFormatting({
+      ref: "A1:A10",
+      rules: [
+        {
+          type: "colorScale",
+          cfvo: [{ type: "min" }, { type: "max" }],
+          color: [{ argb: "FFF8696B" }, { argb: "FF63BE7B" }],
+        },
+      ],
+    });
+
+    // If the core model still held {argb} objects, the writer's `String(color)` would emit
+    // "[object Object]" instead of an rgb attribute — so a real `rgb="FFF8696B"` in the written
+    // bytes proves the objects were normalized to bare strings before serialization.
+    const buf = await (
+      wb as unknown as { xlsx: { writeBuffer: () => Promise<Uint8Array> } }
+    ).xlsx.writeBuffer();
+    const back = readWorkbookBuffer(buf);
+    const data = back.getWorksheet("S");
+    if (!data) throw new Error("S sheet missing");
+    expect(data.conditionalFormattings).toEqual([
+      {
+        ref: "A1:A10",
+        rules: [
+          {
+            type: "colorScale",
+            cfvo: [{ type: "min" }, { type: "max" }],
+            color: ["FFF8696B", "FF63BE7B"],
+            priority: 1,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("normalizes a dataBar's single {argb} colour before it reaches the writer", async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("S") as unknown as CfFacadeWorksheet;
+
+    ws.addConditionalFormatting({
+      ref: "D1:D20",
+      rules: [
+        {
+          type: "dataBar",
+          cfvo: [{ type: "min" }, { type: "max" }],
+          color: { argb: "FF638EC6" },
+        },
+      ],
+    });
+
+    const buf = await (
+      wb as unknown as { xlsx: { writeBuffer: () => Promise<Uint8Array> } }
+    ).xlsx.writeBuffer();
+    const back = readWorkbookBuffer(buf);
+    const data = back.getWorksheet("S");
+    if (!data) throw new Error("S sheet missing");
+    expect(data.conditionalFormattings[0]?.rules[0]).toMatchObject({ color: "FF638EC6" });
+  });
+
+  it("addConditionalFormatting's return value and the conditionalFormattings getter denormalize back to {argb}", () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("S") as unknown as CfFacadeWorksheet;
+
+    const added = ws.addConditionalFormatting({
+      ref: "A1:A10",
+      rules: [
+        {
+          type: "colorScale",
+          cfvo: [{ type: "min" }, { type: "max" }],
+          color: [{ argb: "FFF8696B" }, { argb: "FF63BE7B" }],
+        },
+      ],
+    }) as { rules: Array<{ color: unknown }> };
+
+    expect(added.rules[0]?.color).toEqual([{ argb: "FFF8696B" }, { argb: "FF63BE7B" }]);
+    expect(ws.conditionalFormattings).toEqual([
+      {
+        ref: "A1:A10",
+        rules: [
+          {
+            type: "colorScale",
+            cfvo: [{ type: "min" }, { type: "max" }],
+            color: [{ argb: "FFF8696B" }, { argb: "FF63BE7B" }],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("cellIs and other dxf-bearing rules (already ExcelJS-shaped Style) pass through untouched", () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("S") as unknown as CfFacadeWorksheet;
+
+    ws.addConditionalFormatting({
+      ref: "A1:A10",
+      rules: [
+        {
+          type: "cellIs",
+          operator: "greaterThan",
+          formulae: [5],
+          style: { fill: { type: "pattern", pattern: "solid", bgColor: { argb: "FFF8696B" } } },
+        },
+      ],
+    });
+
+    expect(ws.conditionalFormattings).toEqual([
+      {
+        ref: "A1:A10",
+        rules: [
+          {
+            type: "cellIs",
+            operator: "greaterThan",
+            formulae: [5],
+            style: { fill: { type: "pattern", pattern: "solid", bgColor: { argb: "FFF8696B" } } },
+          },
+        ],
+      },
+    ]);
   });
 });
 
