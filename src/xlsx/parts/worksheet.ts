@@ -185,7 +185,9 @@ export function renderAutoFilter(w: XmlWriter, autoFilter: string | undefined): 
   w.leaf("autoFilter", { ref: autoFilter });
 }
 
-function renderCols(
+/** Emit `<cols><col min max .../>…</cols>` (CT_Worksheet: after `<sheetFormatPr>`, before
+ *  `<sheetData>`). Exported so the streaming writer can reuse it in the worksheet prologue. */
+export function renderCols(
   w: XmlWriter,
   columns: Worksheet["model"]["columns"],
   ctx: WorksheetContext,

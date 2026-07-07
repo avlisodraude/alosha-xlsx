@@ -103,10 +103,11 @@ export function writeWorkbookBuffer(wb: Workbook, options?: WriteOptions): Uint8
   // 1. Worksheets first — this is what fills the shared-strings and styles pools. `sheetNumber` is the
   //    1-based position so any child parts can name themselves deterministically.
   const worksheetXml = new Map<string, RenderedWorksheet>();
-  worksheets.forEach((ws, i) => {
+  for (const [i, ws] of worksheets.entries()) {
     ctx.sheetNumber = i + 1;
-    worksheetXml.set(sheetRels[i]!.fileName, renderWorksheet(ws, ctx));
-  });
+    const fileName = `sheet${i + 1}.xml`;
+    worksheetXml.set(fileName, renderWorksheet(ws, ctx));
+  }
 
   // 2. Now the pools are populated: decide whether a sharedStrings part exists.
   const sharedStringsXml = useSharedStrings ? sharedStrings.toXml() : undefined;

@@ -152,9 +152,22 @@ hyperlink cells.
 Sheet-level features are configured on the `WorksheetWriter` and emitted in the epilogue at
 `ws.commit()`: `mergeCells(...)`, `autoFilter`, `addConditionalFormatting(...)`,
 `dataValidations`, images (`wb.addImage(...)` + `ws.addImage(id, anchor)`), and comments via
-`cell.note`. Two of them — `views` (frozen/split panes, gridline visibility) and `properties`
-(default row height, …) — are written into the sheet *prologue*, so set them **before the first
-row commits**.
+`cell.note`. Three of them — `views` (frozen/split panes, gridline visibility), `properties`
+(default row height, …), and `columns`/`getColumn` (widths, styles, hidden/outline flags) — are
+written into the sheet *prologue*, so set them **before the first row commits**; a column set
+afterward has no effect on the emitted archive (silently ignored, like `views`/`properties`, rather
+than thrown):
+
+```ts
+const ws = wb.addWorksheet("Data");
+ws.columns = [
+  { width: 20 },
+  { width: 12, style: { font: { bold: true } } },
+];
+ws.getColumn(3).width = 8; // same effect, one column at a time
+
+ws.addRow(["Name", "Score", "Active"]).commit();
+```
 
 Workbook metadata (`creator`, `created`, `title`, …, `properties.date1904`, `calcProperties`,
 `views`) lives directly on the `WorkbookWriter`, mirroring ExcelJS.
@@ -187,16 +200,14 @@ stays roughly flat as rows grow.
 
 - **Write-only.** There is no streaming *reader* (`WorkbookReader`) yet; reading is buffer-based
   (`workbook.xlsx.load` / `readWorkbookBuffer`).
-- **Column widths / `<cols>` are not yet supported in streaming mode.** `getColumn` / `columns`
-  are intentionally not exposed on the streaming `WorksheetWriter`, and no `<cols>` block is
-  emitted — a planned follow-up. (Column *content* is unaffected; only widths/column styles/keys
-  are missing.) Use the buffered writer if you need column widths today.
 - **No random access after commit.** A committed row is flushed and gone; committed sheets can't
   be reopened. This is inherent to streaming, not a gap.
-- **Not exposed through `@alosha/xlsx/compat` yet.** `ExcelJS.stream.xlsx.WorkbookWriter` in the
-  compat entry still throws `UnsupportedFeatureError`; import the real writer from the main entry
-  instead — `import { WorkbookWriter } from "@alosha/xlsx"` — its API is ExcelJS-shaped already.
-  Wiring the compat namespace to it is a planned follow-up.
+- **`@alosha/xlsx/compat`'s `ExcelJS.stream.xlsx.WorkbookWriter` is a real bridge onto this writer**
+  (docs/MIGRATION.md D6) — the same lifecycle, with rows/cells proxied the same way the buffered
+  compat facade proxies them. A couple of real-ExcelJS constructor/`addWorksheet` options with no
+  equivalent here (`zip`, `lastPrinted`, `pageSetup`, `headerFooter`, a per-sheet `useSharedStrings`
+  override) throw `UnsupportedFeatureError` instead of being silently dropped. `stream.xlsx.
+  WorkbookReader` still throws — no streaming reader exists (previous point).
 - **No CSV streaming** (matching the absence of CSV support generally).
 
 ## API reference (summary)
@@ -223,6 +234,8 @@ class WorksheetWriter {
   autoFilter?: string;                          // e.g. "A1:D1"
   views: WorksheetView[];                       // set before the first row commits
   properties;                                   // set before the first row commits
+  columns: Column[];                            // set before the first row commits
+  getColumn(idOrKey: number | string): Column;   // same before-first-row rule
   dataValidations;
 }
 ```

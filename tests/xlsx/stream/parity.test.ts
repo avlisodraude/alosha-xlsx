@@ -68,6 +68,7 @@ const ROWS: RowSpec[] = [
 
 const AUTO_FILTER = "A1:C1";
 const FROZEN_VIEW = { state: "frozen" as const, xSplit: 0, ySplit: 1, topLeftCell: "A2" };
+const COLUMNS = [{ width: 20 }, { width: 12, style: BOLD }, { width: 8, hidden: true }];
 const MERGE = "A5:C5";
 const CF = {
   ref: "B2:B5",
@@ -87,6 +88,7 @@ function buildBuffered(): Workbook {
   const ws = wb.addWorksheet("Report");
   ws.views = [FROZEN_VIEW];
   ws.autoFilter = AUTO_FILTER;
+  ws.columns = COLUMNS;
 
   ROWS.forEach((spec, i) => {
     const row = ws.getRow(i + 1);
@@ -115,9 +117,11 @@ async function buildStreamed(): Promise<Uint8Array> {
   wb.modified = MODIFIED;
 
   const ws = wb.addWorksheet("Report");
-  // Panes + auto-filter are read by the prologue, so configure them before the first row commits.
+  // Panes + auto-filter + columns are read by the prologue, so configure them before the first row
+  // commits.
   ws.views = [FROZEN_VIEW];
   ws.autoFilter = AUTO_FILTER;
+  ws.columns = COLUMNS;
 
   for (const spec of ROWS) {
     const row = ws.addRow(spec.values);
@@ -193,10 +197,14 @@ describe("streaming parity — full feature matrix", () => {
     expect(ws.getCell("A1").font?.bold).toBe(true);
     expect(ws.getCell("B2").numFmt).toBe("0.00");
 
-    // Frozen panes (prologue), auto-filter + merge (epilogue).
+    // Frozen panes, auto-filter, and column widths (prologue), merge (epilogue).
     expect(ws.views[0]?.state).toBe("frozen");
     expect(ws.views[0]?.ySplit).toBe(1);
     expect(ws.autoFilter).toBe(AUTO_FILTER);
+    expect(ws.getColumn(1).width).toBe(20);
+    expect(ws.getColumn(2).width).toBe(12);
+    expect(ws.getColumn(2).font?.bold).toBe(true);
+    expect(ws.getColumn(3).hidden).toBe(true);
     expect(ws.getCell("B5").isMerged).toBe(true);
 
     // Conditional formatting.

@@ -16,6 +16,8 @@
 import { DuplicateWorksheetNameError } from "../../errors.js";
 import type {
   AddImageOptions,
+  Column,
+  ColumnDefn,
   ConditionalFormatting,
   DataValidations,
   ImageAnchor,
@@ -39,6 +41,7 @@ import {
   type ExtraPart,
   type HyperlinkRecord,
   renderAutoFilter,
+  renderCols,
   renderConditionalFormatting,
   renderDataValidations,
   renderHyperlinks,
@@ -134,6 +137,22 @@ export class WorksheetWriter {
     return this.sheet.properties;
   }
 
+  /** Column widths/styles/keys (`<cols>`), same before-first-row rule as `views`/`properties` above —
+   *  it's read by the prologue, so a column set after the first row commits has no effect on the
+   *  emitted archive (silently ignored, not thrown — matching `views`). */
+  get columns(): Column[] {
+    return this.sheet.columns;
+  }
+  set columns(defns: Partial<ColumnDefn>[]) {
+    this.sheet.columns = defns;
+  }
+
+  /** Get (or lazily create) a column by 1-based index or assigned key; same before-first-row caveat
+   *  as {@link columns} for anything that affects `<cols>` (width/hidden/outlineLevel/style). */
+  getColumn(idOrKey: number | string): Column {
+    return this.sheet.getColumn(idOrKey);
+  }
+
   /** Merge a range (same argument forms as the buffered `Worksheet.mergeCells`). */
   mergeCells(...cells: unknown[]): void {
     this.sheet.mergeCells(...(cells as Parameters<Worksheet["mergeCells"]>));
@@ -192,6 +211,8 @@ export class WorksheetWriter {
       defaultRowHeight: props.defaultRowHeight ?? 15,
       defaultColWidth: props.defaultColWidth,
     });
+    // CT_Worksheet order: `<cols>` sits after `<sheetFormatPr>`, before `<sheetData>`.
+    renderCols(w, this.sheet.model.columns, this.workbook.context);
     w.open("sheetData");
     this.workbook.pushSheetChunk(w.toString());
   }

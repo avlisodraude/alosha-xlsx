@@ -125,9 +125,9 @@ await wb.commit();
 Instead of a `filename`, pass a Node `Writable` (`{ stream: res }`) — or pass nothing and the
 writer itself is an `AsyncIterable<Uint8Array>` of archive chunks (browser/edge-safe). Strings
 default to inline (`useSharedStrings: false`) so committed rows retain nothing. Styles, merges,
-panes/auto-filter, hyperlinks, data validation, conditional formatting, comments, and images all
-stream with buffered-writer parity; column widths (`<cols>`) and a streaming *reader* are not
-supported yet. See [`docs/STREAMING.md`](https://github.com/avlisodraude/alosha-xlsx/blob/main/docs/STREAMING.md)
+panes/auto-filter, column widths, hyperlinks, data validation, conditional formatting, comments, and
+images all stream with buffered-writer parity; a streaming *reader* is not supported yet. See
+[`docs/STREAMING.md`](https://github.com/avlisodraude/alosha-xlsx/blob/main/docs/STREAMING.md)
 for the full guide.
 
 ## Feature matrix
@@ -150,7 +150,7 @@ for the full guide.
 | Hyperlink cells (external URL/mailto) | ✅ | ✅ | real OOXML relationship, round-trips as `{ text, hyperlink, tooltip? }`; internal `location=` links deferred |
 | Data validation (dropdowns, constraints) | ✅ | ✅ | same-sheet ranges and inline lists; cross-sheet list refs deferred |
 | Conditional formatting (`cellIs`, `expression`, text-contains family, `top10`, `aboveAverage`/`belowAverage`, `duplicateValues`/`uniqueValues`, `colorScale`, `dataBar`, `iconSet`) | ✅ | ✅ | differential styles dedup into a `<dxfs>` pool; x14 dataBar gradient/axis/negative-fill, `timePeriod` rules, and custom iconSet icons deferred |
-| Streaming write (`WorkbookWriter`) | ❌ | ✅ | bounded-memory row-by-row writes, full feature parity except `<cols>`/column widths; streaming read deferred — see [`docs/STREAMING.md`](https://github.com/avlisodraude/alosha-xlsx/blob/main/docs/STREAMING.md) |
+| Streaming write (`WorkbookWriter`) | ❌ | ✅ | bounded-memory row-by-row writes, full feature parity with the buffered writer; streaming read deferred — see [`docs/STREAMING.md`](https://github.com/avlisodraude/alosha-xlsx/blob/main/docs/STREAMING.md) |
 | Embedded images (`workbook.addImage` + `worksheet.addImage`) | ✅ | ✅ | two-cell and one-cell/pixel-extent anchors; cropping/rotation, background/header-footer images, SVG, and EMF/WMF deferred |
 | Charts | ❌ | ❌ | deferred |
 | Comments (`cell.note`) | ✅ | ✅ | note/author table (`comments{n}.xml`) + legacy VML anchor (`vmlDrawing{n}.vml`); threaded/modern comments and box geometry deferred |
@@ -186,13 +186,12 @@ behavioural notes to check before porting.
   round-trip as real OOXML relationships (`{ text, hyperlink, tooltip? }`). Links to a location
   within the same workbook (ExcelJS's `location="Sheet2!A1"` form, no external relationship) aren't
   written or read yet.
-- **Streaming is write-only.** The streaming `WorkbookWriter` covers writes
+- **Streaming is write-only.** The streaming `WorkbookWriter` covers writes, with full feature
+  parity with the buffered writer including column widths
   ([`docs/STREAMING.md`](https://github.com/avlisodraude/alosha-xlsx/blob/main/docs/STREAMING.md));
   reading is still buffer-based (the whole workbook lives in memory) — a streaming `WorkbookReader`
-  is deferred. In streaming mode, column widths / `<cols>` are not yet supported (`getColumn` /
-  `columns` are intentionally not exposed on the streaming worksheet) — a planned follow-up — and
-  `ExcelJS.stream.xlsx.WorkbookWriter` in `@alosha/xlsx/compat` still throws; import
-  `WorkbookWriter` from the main entry instead.
+  is deferred, and so `ExcelJS.stream.xlsx.WorkbookReader` in `@alosha/xlsx/compat` still throws
+  (`ExcelJS.stream.xlsx.WorkbookWriter` is a real bridge onto the streaming writer).
 - **Embedded images** support the two anchor forms ExcelJS uses day-to-day — a two-cell range
   (`"B2:D6"` or `{ tl, br }`) and a one-cell position with a pixel extent (`{ tl, ext }`). Image
   cropping/rotation/effects, hyperlinked images, header/footer (background) images, SVG, and

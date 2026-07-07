@@ -217,8 +217,7 @@ describe("compat facade — deferred surface throws UnsupportedFeatureError (§6
     expect(() => ws.addBackgroundImage()).toThrow(UnsupportedFeatureError);
   });
 
-  it("namespace-level: stream.xlsx.WorkbookWriter / WorkbookReader", () => {
-    expect(() => new ExcelJS.stream.xlsx.WorkbookWriter()).toThrow(UnsupportedFeatureError);
+  it("namespace-level: stream.xlsx.WorkbookReader (WorkbookWriter is a real bridge — see below)", () => {
     expect(() => new ExcelJS.stream.xlsx.WorkbookReader()).toThrow(UnsupportedFeatureError);
   });
 });
@@ -431,6 +430,123 @@ describe("compat facade — conditional formatting colour-shape bridge (CONDITIO
   });
 });
 
+describe("compat facade — containsText family type/operator bridge (CONDITIONAL-FORMATTING-SPEC §4, MIGRATION D3)", () => {
+  interface CfFacadeWorksheet {
+    addConditionalFormatting: (cf: unknown) => unknown;
+    conditionalFormattings: unknown[];
+  }
+
+  it.each([
+    ["containsText", "containsText"],
+    ["notContains", "notContainsText"],
+    ["beginsWith", "beginsWith"],
+    ["endsWith", "endsWith"],
+  ] as const)("normalizes ExcelJS's {type:'containsText', operator:%s} to the core's {type:%s} before it reaches the writer", async (operator, coreType) => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("S") as unknown as CfFacadeWorksheet;
+
+    ws.addConditionalFormatting({
+      ref: "A1:A10",
+      rules: [{ type: "containsText", operator, text: "foo" }],
+    });
+
+    const buf = await (
+      wb as unknown as { xlsx: { writeBuffer: () => Promise<Uint8Array> } }
+    ).xlsx.writeBuffer();
+    const back = readWorkbookBuffer(buf);
+    const data = back.getWorksheet("S");
+    if (!data) throw new Error("S sheet missing");
+    expect(data.conditionalFormattings[0]?.rules[0]).toMatchObject({
+      type: coreType,
+      text: "foo",
+    });
+  });
+
+  it("denormalizes the core's per-variant type back to ExcelJS's {type:'containsText', operator} on read", () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("S") as unknown as CfFacadeWorksheet;
+
+    ws.addConditionalFormatting({
+      ref: "A1:A10",
+      rules: [{ type: "containsText", operator: "beginsWith", text: "foo" }],
+    });
+
+    expect(ws.conditionalFormattings).toEqual([
+      {
+        ref: "A1:A10",
+        rules: [{ type: "containsText", operator: "beginsWith", text: "foo" }],
+      },
+    ]);
+  });
+
+  it("still accepts the core's native per-variant type with no operator field", () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("S") as unknown as CfFacadeWorksheet;
+
+    ws.addConditionalFormatting({
+      ref: "A1:A10",
+      rules: [{ type: "endsWith", text: "bar" }],
+    });
+
+    expect(ws.conditionalFormattings).toEqual([
+      {
+        ref: "A1:A10",
+        rules: [{ type: "containsText", operator: "endsWith", text: "bar" }],
+      },
+    ]);
+  });
+});
+
+describe("compat facade — removeConditionalFormatting index/predicate/clear-all bridge (CONDITIONAL-FORMATTING-SPEC §4, MIGRATION D3)", () => {
+  interface CfFacadeWorksheet {
+    addConditionalFormatting: (cf: unknown) => unknown;
+    removeConditionalFormatting: (filter?: unknown) => void;
+    conditionalFormattings: Array<{ ref: string }>;
+  }
+
+  function buildThreeBlocks(): CfFacadeWorksheet {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("S") as unknown as CfFacadeWorksheet;
+    ws.addConditionalFormatting({
+      ref: "A1:A10",
+      rules: [{ type: "cellIs", operator: "greaterThan", formulae: [5] }],
+    });
+    ws.addConditionalFormatting({
+      ref: "B1:B10",
+      rules: [{ type: "cellIs", operator: "lessThan", formulae: [5] }],
+    });
+    ws.addConditionalFormatting({
+      ref: "C1:C10",
+      rules: [{ type: "cellIs", operator: "equal", formulae: [5] }],
+    });
+    return ws;
+  }
+
+  it("removes the block at an index, ExcelJS-splice style", () => {
+    const ws = buildThreeBlocks();
+    ws.removeConditionalFormatting(1);
+    expect(ws.conditionalFormattings.map((cf) => cf.ref)).toEqual(["A1:A10", "C1:C10"]);
+  });
+
+  it("supports a negative index like Array.prototype.splice", () => {
+    const ws = buildThreeBlocks();
+    ws.removeConditionalFormatting(-1);
+    expect(ws.conditionalFormattings.map((cf) => cf.ref)).toEqual(["A1:A10", "B1:B10"]);
+  });
+
+  it("keeps only the blocks for which the predicate returns truthy, Array.prototype.filter style", () => {
+    const ws = buildThreeBlocks();
+    ws.removeConditionalFormatting((cf: { ref: string }) => cf.ref !== "B1:B10");
+    expect(ws.conditionalFormattings.map((cf) => cf.ref)).toEqual(["A1:A10", "C1:C10"]);
+  });
+
+  it("clears every block when called with no argument", () => {
+    const ws = buildThreeBlocks();
+    ws.removeConditionalFormatting();
+    expect(ws.conditionalFormattings).toEqual([]);
+  });
+});
+
 describe("compat facade — eachRow/eachCell skip empty like ExcelJS (0.3.1)", () => {
   it("default iteration drops empty rows and explicitly-null cells", () => {
     const wb = new ExcelJS.Workbook();
@@ -475,5 +591,123 @@ describe("compat facade — eachRow/eachCell skip empty like ExcelJS (0.3.1)", (
     const cols: number[] = [];
     ws.getRow(1).eachCell({ includeEmpty: true }, (_cell, c) => cols.push(c));
     expect(cols).toEqual([1, 2]); // B1 included
+  });
+});
+
+describe("compat facade — stream.xlsx.WorkbookWriter (docs/STREAMING.md; MIGRATION D6)", () => {
+  interface StreamRow {
+    getCell: (addr: string | number) => { type: unknown; value: unknown };
+    commit: () => void;
+  }
+  interface StreamWorksheetWriter {
+    addRow: (data: unknown) => StreamRow;
+    commit: () => void;
+    committed: boolean;
+    autoFilter: string | undefined;
+  }
+  interface StreamWorkbookWriter {
+    addWorksheet: (name?: string, options?: unknown) => StreamWorksheetWriter;
+    commit: () => Promise<void>;
+    creator: string | undefined;
+    [Symbol.asyncIterator]: () => AsyncIterator<Uint8Array>;
+  }
+
+  async function collect(iterable: AsyncIterable<Uint8Array>): Promise<Uint8Array> {
+    const chunks: Uint8Array[] = [];
+    for await (const chunk of iterable) chunks.push(chunk);
+    const out = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+    let offset = 0;
+    for (const c of chunks) {
+      out.set(c, offset);
+      offset += c.length;
+    }
+    return out;
+  }
+
+  it("a streamed workbook reloads to the expected model", async () => {
+    const wb = new ExcelJS.stream.xlsx.WorkbookWriter() as unknown as StreamWorkbookWriter;
+    const ws = wb.addWorksheet("Sheet1");
+    ws.addRow([1, "hello", true]).commit();
+    ws.addRow([2, "world", false]).commit();
+    ws.commit();
+    await wb.commit();
+
+    const buf = await collect(wb);
+    const back = readWorkbookBuffer(buf);
+    const sheet = back.getWorksheet("Sheet1");
+    if (!sheet) throw new Error("Sheet1 missing");
+    expect(sheet.getCell("A1").value).toBe(1);
+    expect(sheet.getCell("B1").value).toBe("hello");
+    expect(sheet.getCell("C1").value).toBe(true);
+    expect(sheet.getCell("A2").value).toBe(2);
+    expect(sheet.getCell("B2").value).toBe("world");
+  });
+
+  it("addRow's returned row is proxied (ExcelJS cell.type numbers) before commit", () => {
+    const wb = new ExcelJS.stream.xlsx.WorkbookWriter() as unknown as StreamWorkbookWriter;
+    const ws = wb.addWorksheet("Sheet1");
+    const row = ws.addRow(["hi", 42]);
+    expect(row.getCell(1).type).toBe(ValueType.String); // 3, not the core CellType number
+    expect(row.getCell(2).type).toBe(ValueType.Number); // 2
+    row.commit();
+    ws.commit();
+  });
+
+  it("worksheet.committed reflects the core isCommitted flag (ExcelJS's field name)", () => {
+    const wb = new ExcelJS.stream.xlsx.WorkbookWriter() as unknown as StreamWorkbookWriter;
+    const ws = wb.addWorksheet("Sheet1");
+    expect(ws.committed).toBe(false);
+    ws.commit();
+    expect(ws.committed).toBe(true);
+  });
+
+  it("doc-metadata (creator, etc.) passes through to the archive", async () => {
+    const wb = new ExcelJS.stream.xlsx.WorkbookWriter() as unknown as StreamWorkbookWriter;
+    wb.creator = "Ada";
+    expect(wb.creator).toBe("Ada");
+    const ws = wb.addWorksheet("Sheet1");
+    ws.commit();
+    await wb.commit();
+    const buf = await collect(wb);
+    const back = readWorkbookBuffer(buf);
+    expect(back.creator).toBe("Ada");
+  });
+
+  it("bridges filename/stream/useSharedStrings/useStyles constructor options", async () => {
+    const wb = new ExcelJS.stream.xlsx.WorkbookWriter({
+      useSharedStrings: true,
+      useStyles: true,
+    }) as unknown as StreamWorkbookWriter;
+    const ws = wb.addWorksheet("Sheet1");
+    ws.addRow(["shared string"]).commit();
+    ws.commit();
+    await wb.commit();
+    const buf = await collect(wb);
+    const back = readWorkbookBuffer(buf);
+    expect(back.getWorksheet("Sheet1")?.getCell("A1").value).toBe("shared string");
+  });
+
+  it("throws UnsupportedFeatureError for constructor options with no equivalent (zip, lastPrinted)", () => {
+    expect(() => new ExcelJS.stream.xlsx.WorkbookWriter({ zip: {} })).toThrow(
+      UnsupportedFeatureError,
+    );
+    expect(() => new ExcelJS.stream.xlsx.WorkbookWriter({ lastPrinted: new Date() })).toThrow(
+      UnsupportedFeatureError,
+    );
+  });
+
+  it("throws UnsupportedFeatureError for addWorksheet options with no streaming equivalent", () => {
+    const wb = new ExcelJS.stream.xlsx.WorkbookWriter() as unknown as StreamWorkbookWriter;
+    expect(() => wb.addWorksheet("S", { pageSetup: {} })).toThrow(UnsupportedFeatureError);
+    expect(() => wb.addWorksheet("S", { headerFooter: {} })).toThrow(UnsupportedFeatureError);
+    expect(() => wb.addWorksheet("S", { useSharedStrings: true })).toThrow(UnsupportedFeatureError);
+  });
+
+  it("addWorksheet's autoFilter option accepts ExcelJS's {from,to} object form", async () => {
+    const wb = new ExcelJS.stream.xlsx.WorkbookWriter() as unknown as StreamWorkbookWriter;
+    const ws = wb.addWorksheet("Sheet1", { autoFilter: { from: "A1", to: "C1" } });
+    expect(ws.autoFilter).toBe("A1:C1");
+    ws.commit();
+    await wb.commit();
   });
 });

@@ -13,7 +13,7 @@
  */
 
 import { FormulaType, ValueType } from "./value-type.js";
-import { CompatWorkbook, streamStub } from "./workbook.js";
+import { CompatWorkbook, compatStream } from "./workbook.js";
 
 export * from "../index.js";
 export { fromExcelJSValueType, toExcelJSValueType, ValueType } from "./value-type.js";
@@ -31,7 +31,7 @@ const ExcelJS = {
   ValueType,
   FormulaType,
   Enums,
-  stream: streamStub,
+  stream: compatStream,
 };
 
 export default ExcelJS;
