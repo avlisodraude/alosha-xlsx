@@ -123,7 +123,8 @@ functions accept a `ReadOptions` (reserved for future use).
 | Data validation (dropdowns, constraints) | ✅ | ✅ | same-sheet ranges and inline lists; cross-sheet list refs deferred |
 | Conditional formatting (`cellIs`, `expression`, text-contains family, `top10`, `aboveAverage`/`belowAverage`, `duplicateValues`/`uniqueValues`, `colorScale`, `dataBar`, `iconSet`) | ✅ | ✅ | differential styles dedup into a `<dxfs>` pool; x14 dataBar gradient/axis/negative-fill, `timePeriod` rules, and custom iconSet icons deferred |
 | Streaming read/write | ❌ | ❌ | deferred |
-| Drawings / images / charts | ❌ | ❌ | deferred |
+| Embedded images (`workbook.addImage` + `worksheet.addImage`) | ✅ | ✅ | two-cell and one-cell/pixel-extent anchors; cropping/rotation, background/header-footer images, SVG, and EMF/WMF deferred |
+| Charts | ❌ | ❌ | deferred |
 | Comments (`cell.note`) | ✅ | ✅ | note/author table (`comments{n}.xml`) + legacy VML anchor (`vmlDrawing{n}.vml`); threaded/modern comments and box geometry deferred |
 
 ## Migrating from ExcelJS
@@ -143,12 +144,12 @@ behave as you'd expect. Common differences to watch for:
 - **ESM-first.** The package is ESM with a CJS fallback; prefer `import` over `require`.
 
 Not everything ExcelJS does is implemented yet — check the feature matrix and limitations before
-porting a workbook that leans on drawings or streaming.
+porting a workbook that leans on charts or streaming.
 
 **Want a one-line import swap instead?** `@alosha/xlsx/compat` is an ExcelJS-shaped drop-in — same
 `cell.type` numbers, same style-setter precedence, same `addRow`/`row.values`/`worksheet.columns`
 behaviour — for code that shouldn't need to change beyond `import ExcelJS from "@alosha/xlsx/compat"`.
-See [`docs/MIGRATION.md`](https://github.com/avlisodraude/alosha-xlsx/blob/main/docs/MIGRATION.md) for the supported/deferred matrix and the four
+See [`docs/MIGRATION.md`](https://github.com/avlisodraude/alosha-xlsx/blob/main/docs/MIGRATION.md) for the supported/deferred matrix and the five
 behavioural notes to check before porting.
 
 ## Known limitations
@@ -159,7 +160,11 @@ behavioural notes to check before porting.
   written or read yet.
 - **No streaming.** Reading and writing are buffer-based (the whole workbook lives in memory). A
   streaming API for very large sheets is deferred.
-- **No drawings, images, or charts.** These parts are ignored on read and not emitted on write.
+- **Embedded images** support the two anchor forms ExcelJS uses day-to-day — a two-cell range
+  (`"B2:D6"` or `{ tl, br }`) and a one-cell position with a pixel extent (`{ tl, ext }`). Image
+  cropping/rotation/effects, hyperlinked images, header/footer (background) images, SVG, and
+  EMF/WMF are deferred; `worksheet.addBackgroundImage` stays a permanent stub.
+- **No charts.** These parts are ignored on read and not emitted on write.
 - **Comments** (`cell.note`) round-trip plain-string and rich-text notes plus a multi-author
   `<authors>` table, backed by `comments{n}.xml` + a legacy `vmlDrawing{n}.vml` anchor. Threaded/modern
   comments (`xl/threadedComments/`) and comment box geometry/margins/`editAs`/visibility are deferred —

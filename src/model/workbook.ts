@@ -166,6 +166,11 @@ export class Workbook {
     return this._images.get(imageId);
   }
 
+  /** All interned images, in registration order (a fresh copy) — index is the `imageId`. */
+  get images(): WorkbookImage[] {
+    return this._images.model;
+  }
+
   // --- model ------------------------------------------------------------------------------------
 
   get model(): WorkbookModel {

@@ -125,6 +125,38 @@ describe("compat facade — row / column / value parity (§5)", () => {
   });
 });
 
+describe("compat facade — images bridge straight to the core registry (IMAGES-DRAWINGS-SPEC.md §4)", () => {
+  it("workbook.addImage/getImage/media and worksheet.addImage/getImages round-trip in memory", () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("S");
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+
+    const workbookApi = wb as unknown as {
+      addImage: (img: { extension: string; buffer: Uint8Array }) => number;
+      getImage: (id: number) => { type: string; extension: string; buffer: Uint8Array } | undefined;
+      media: Array<{ type: string; extension: string; buffer: Uint8Array }>;
+    };
+    const worksheetApi = ws as unknown as {
+      addImage: (id: number, anchor: string) => void;
+      getImages: () => Array<{ type: string; imageId: number; range: unknown }>;
+    };
+
+    const imageId = workbookApi.addImage({ extension: "png", buffer: png });
+    expect(imageId).toBe(0);
+    expect(workbookApi.getImage(imageId)).toEqual({ type: "image", extension: "png", buffer: png });
+    expect(workbookApi.media).toEqual([{ type: "image", extension: "png", buffer: png }]);
+
+    worksheetApi.addImage(imageId, "B2:D6");
+    expect(worksheetApi.getImages()).toEqual([
+      {
+        type: "image",
+        imageId: 0,
+        range: { tl: { col: 1, row: 1 }, br: { col: 3, row: 5 } },
+      },
+    ]);
+  });
+});
+
 describe("compat facade — identity & instanceof", () => {
   it("is a real Workbook and returns stable cell facades", () => {
     const wb = new ExcelJS.Workbook();
@@ -149,30 +181,40 @@ describe("compat facade — identity & instanceof", () => {
 });
 
 describe("compat facade — deferred surface throws UnsupportedFeatureError (§6)", () => {
-  it("workbook-level: addImage / csv / definedNames / media", () => {
+  it("workbook-level: csv / definedNames", () => {
     const wb = new ExcelJS.Workbook();
-    expect(() => (wb as unknown as { addImage: () => void }).addImage()).toThrow(
-      UnsupportedFeatureError,
-    );
     expect(() => (wb as unknown as { csv: { writeBuffer: () => void } }).csv.writeBuffer()).toThrow(
       UnsupportedFeatureError,
     );
     expect(() =>
       (wb as unknown as { definedNames: { add: () => void } }).definedNames.add(),
     ).toThrow(UnsupportedFeatureError);
-    expect(() => (wb as unknown as { media: unknown }).media).toThrow(UnsupportedFeatureError);
   });
 
-  it("worksheet-level: addImage / addTable / protect", () => {
+  it("workbook-level: addImage rejects base64/filename inputs and a missing buffer", () => {
+    const wb = new ExcelJS.Workbook();
+    const addImage = (wb as unknown as { addImage: (img: unknown) => number }).addImage;
+    expect(() => addImage({ extension: "png", base64: "AA==" })).toThrow(UnsupportedFeatureError);
+    expect(() => addImage({ extension: "png", filename: "a.png" })).toThrow(
+      UnsupportedFeatureError,
+    );
+    expect(() => addImage({ extension: "png" })).toThrow(UnsupportedFeatureError);
+  });
+
+  it("worksheet-level: addTable / protect", () => {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("S") as unknown as {
-      addImage: () => void;
       addTable: () => void;
       protect: () => void;
     };
-    expect(() => ws.addImage()).toThrow(UnsupportedFeatureError);
     expect(() => ws.addTable()).toThrow(UnsupportedFeatureError);
     expect(() => ws.protect()).toThrow(UnsupportedFeatureError);
+  });
+
+  it("worksheet-level: addBackgroundImage stays a documented stub", () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("S") as unknown as { addBackgroundImage: () => void };
+    expect(() => ws.addBackgroundImage()).toThrow(UnsupportedFeatureError);
   });
 
   it("namespace-level: stream.xlsx.WorkbookWriter / WorkbookReader", () => {
