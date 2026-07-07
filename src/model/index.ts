@@ -12,6 +12,14 @@ export type {
 export { detectType, effectiveType, fromStored, toCsv, toStored, toText } from "./cell-value.js";
 export type { ColumnDefn, ColumnRange } from "./column.js";
 export { Column, DEFAULT_COLUMN_WIDTH } from "./column.js";
+export type {
+  DataValidation,
+  DataValidationErrorStyle,
+  DataValidationModel,
+  DataValidationOperator,
+  DataValidationType,
+} from "./data-validation.js";
+export { DataValidations } from "./data-validation.js";
 export type { ErrorCode } from "./enums.js";
 export { CellType, FormulaType } from "./enums.js";
 export type { RowModel } from "./row.js";

@@ -18,6 +18,7 @@ import {
   toText,
 } from "./cell-value.js";
 import type { Column } from "./column.js";
+import type { DataValidation } from "./data-validation.js";
 import { CellType, FormulaType } from "./enums.js";
 import type { Row } from "./row.js";
 import {
@@ -193,6 +194,15 @@ export class Cell {
 
   set protection(v: Protection | undefined) {
     this._style = { ...this._style, protection: v };
+  }
+
+  /** The data validation covering this cell, if any (resolved through the worksheet's store). */
+  get dataValidation(): DataValidation | undefined {
+    return this.rowRef.worksheet.dataValidations.find(this.address);
+  }
+
+  set dataValidation(dv: DataValidation) {
+    this.rowRef.worksheet.dataValidations.add(this.address, dv);
   }
 
   get model(): CellModel {
