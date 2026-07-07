@@ -10,14 +10,19 @@
 //      emulation) instead of our `CellType` numbers.
 //   2. cell style setters (`font`/`fill`/`border`/`alignment`/`protection`/`numFmt`) route through
 //      `applyExcelJsStyle` — ExcelJS whole-object-per-category precedence (§4).
-//   3. the deferred surface (§6: stream/csv/images/tables/conditional-formatting/data-validation/
-//      comments/defined-names/protection) throws `UnsupportedFeatureError` at the exact call, naming
-//      the feature, rather than silently no-op'ing.
+//   3. the deferred surface (§6: stream/csv/images/tables/conditional-formatting/comments/
+//      defined-names/protection) throws `UnsupportedFeatureError` at the exact call, naming the
+//      feature, rather than silently no-op'ing.
 //
 // Everything else — `addRow(array | object)`, `row.values` (1-based, empty `[0]`), `worksheet.columns
-// = [{header, key, width}]`, the `workbook.xlsx.*` I/O accessor — is already ExcelJS-shaped in the
-// core model (COMPAT-SPEC.md §2 "already compatible"), so the proxies pass it straight through. The
-// core classes are never mutated; the divergence lives entirely in these compat-only wrappers.
+// = [{header, key, width}]`, the `workbook.xlsx.*` I/O accessor, `cell.dataValidation` and
+// `worksheet.dataValidations` (DATA-VALIDATION-SPEC §5 — the core shape already matches ExcelJS's) —
+// is already ExcelJS-shaped in the core model (COMPAT-SPEC.md §2 "already compatible"), so the
+// proxies pass it straight through. The core classes are never mutated; the divergence lives
+// entirely in these compat-only wrappers.
+//
+// Deferred still (DATA-VALIDATION-SPEC §8): a cross-sheet list ref (the x14/`<extLst>` form) is not
+// supported — only same-sheet ranges and inline lists round-trip.
 
 import { UnsupportedFeatureError } from "../errors.js";
 import type { XlsxAccessor } from "../index.js";
@@ -196,9 +201,6 @@ function proxyCell(cell: Cell): Cell {
       if (prop === "note") {
         throw new UnsupportedFeatureError("cell.note (comments)", COMPAT_DEFER);
       }
-      if (prop === "dataValidation") {
-        throw new UnsupportedFeatureError("cell.dataValidation (data validation)", COMPAT_DEFER);
-      }
       return Reflect.set(target, prop, value, target);
     },
   });
@@ -272,12 +274,6 @@ function proxyWorksheet(worksheet: Worksheet): Worksheet {
       if (prop === RAW) return target;
       if (typeof prop === "string" && WORKSHEET_UNSUPPORTED.has(prop)) {
         return thrower(`worksheet.${prop}`);
-      }
-      if (prop === "dataValidations") {
-        throw new UnsupportedFeatureError(
-          "worksheet.dataValidations (data validation)",
-          COMPAT_DEFER,
-        );
       }
       // ExcelJS parity: default `eachRow` skips empty rows (§ MIGRATION "eachRow/eachCell").
       if (prop === "eachRow") {

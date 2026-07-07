@@ -59,12 +59,12 @@ never the core's field merge. Again, this is scoped to compat-constructed workbo
 | `Enums.ValueType`, `Enums.FormulaType` | ✅ | |
 | `workbook.xlsx.writeBuffer`/`writeFile`/`load`/`readFile`/`read` | ✅ | |
 | Hyperlink cells (`{ text, hyperlink }`, external URL/mailto) | ✅ | persists as a real OOXML relationship; round-trips to `{text, hyperlink, tooltip?}` with `cell.type` `Hyperlink`. Internal `location=` (in-workbook) links are still ⚠️ deferred. |
+| `worksheet.dataValidations` (`add`/`find`/`remove`/`model`), `cell.dataValidation` | ✅ | list dropdowns (inline or same-sheet range), whole/decimal/date/time/textLength constraints, custom formulas. Note: OOXML's `showDropDown` attribute is inverted — it *hides* the dropdown when present — which the model corrects (`showDropDown: false` means hidden); see DATA-VALIDATION-SPEC §4. A list referencing a range on **another sheet** (the x14/`<extLst>` form) is still ⚠️ deferred. |
 | `stream.xlsx.WorkbookWriter` / `WorkbookReader` | ❌ deferred | throws `UnsupportedFeatureError` |
 | `workbook.csv.*` | ❌ deferred | throws `UnsupportedFeatureError` |
 | `addImage`/`getImage`/`workbook.media`/`worksheet.addImage` | ❌ deferred | throws `UnsupportedFeatureError` |
 | `worksheet.addTable`/`getTable(s)` (tables, pivot tables) | ❌ deferred | throws `UnsupportedFeatureError` |
 | `worksheet.addConditionalFormatting`/`removeConditionalFormatting` | ❌ deferred | throws `UnsupportedFeatureError` |
-| `worksheet.dataValidations`, `cell.dataValidation` | ❌ deferred | throws `UnsupportedFeatureError` |
 | `cell.note` (comments) | ❌ deferred | throws `UnsupportedFeatureError` |
 | `workbook.definedNames.*` | ❌ deferred | throws `UnsupportedFeatureError` |
 | `worksheet.protect`/`unprotect` | ❌ deferred | throws `UnsupportedFeatureError` |

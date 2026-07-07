@@ -140,7 +140,7 @@ behave as you'd expect. Common differences to watch for:
 - **ESM-first.** The package is ESM with a CJS fallback; prefer `import` over `require`.
 
 Not everything ExcelJS does is implemented yet — check the feature matrix and limitations before
-porting a workbook that leans on drawings, streaming, or data validation.
+porting a workbook that leans on drawings, streaming, or conditional formatting.
 
 **Want a one-line import swap instead?** `@alosha/xlsx/compat` is an ExcelJS-shaped drop-in — same
 `cell.type` numbers, same style-setter precedence, same `addRow`/`row.values`/`worksheet.columns`
@@ -157,7 +157,10 @@ behavioural notes to check before porting.
 - **No streaming.** Reading and writing are buffer-based (the whole workbook lives in memory). A
   streaming API for very large sheets is deferred.
 - **No drawings, images, or charts.** These parts are ignored on read and not emitted on write.
-- **No data validation, conditional formatting, or comments** yet.
+- **No conditional formatting or comments** yet.
+- **Data validation** (list dropdowns, whole/decimal/date/time/text-length constraints, custom
+  formulas) is supported for same-sheet ranges and inline lists. A list referencing a range on
+  **another sheet** (the x14/`<extLst>` form Excel uses for that case) is deferred.
 
 See [`BENCHMARKS.md`](https://github.com/avlisodraude/alosha-xlsx/blob/main/BENCHMARKS.md) for
 write/read throughput and output-size numbers against ExcelJS, and

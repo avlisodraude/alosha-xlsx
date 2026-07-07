@@ -366,8 +366,11 @@ function collectDataValidations(c: XmlCursor, container: string, out: DataValida
     }
 
     const dv: DataValidation = { type: dvType };
-    if (child.attrs.operator !== undefined && DATA_VALIDATION_OPERATOR_TYPES.has(dvType)) {
-      dv.operator = child.attrs.operator as DataValidationOperator;
+    if (DATA_VALIDATION_OPERATOR_TYPES.has(dvType)) {
+      // ST_DataValidationOperator defaults to "between" when the attribute is absent (ECMA-376;
+      // ExcelJS's own reader applies the same default), so a foreign file that omits it for a
+      // between-style validation still resolves to the correct operator.
+      dv.operator = (child.attrs.operator as DataValidationOperator | undefined) ?? "between";
     }
     if (truthy(child.attrs.allowBlank)) dv.allowBlank = true;
     if (truthy(child.attrs.showInputMessage)) dv.showInputMessage = true;

@@ -180,6 +180,59 @@ describe("read round-trip — hyperlinks", () => {
   });
 });
 
+describe("read round-trip — data validations", () => {
+  it("persists a list dropdown, a numeric between, and a custom rule and reads them back equal", () => {
+    const wb = new Workbook();
+    const ws = wb.addWorksheet("Validated");
+    ws.getCell("A1").dataValidation = {
+      type: "list",
+      allowBlank: true,
+      showInputMessage: true,
+      showErrorMessage: true,
+      formulae: ['"Yes,No,Maybe"'],
+    };
+    ws.dataValidations.add("B1:B10", {
+      type: "decimal",
+      operator: "between",
+      formulae: [0, 100],
+    });
+    ws.dataValidations.add("C1", {
+      type: "custom",
+      showErrorMessage: true,
+      errorStyle: "stop",
+      errorTitle: "Invalid",
+      error: "Must be a positive number",
+      formulae: ["ISNUMBER(C1)"],
+    });
+
+    const back = readWorkbookBuffer(writeWorkbookBuffer(wb));
+    const data = back.getWorksheet("Validated");
+    if (!data) throw new Error("Validated sheet missing");
+
+    expect(data.dataValidations.model).toEqual(ws.dataValidations.model);
+    expect(data.getCell("A1").dataValidation).toEqual({
+      type: "list",
+      allowBlank: true,
+      showInputMessage: true,
+      showErrorMessage: true,
+      formulae: ['"Yes,No,Maybe"'],
+    });
+    expect(data.dataValidations.find("B5")).toEqual({
+      type: "decimal",
+      operator: "between",
+      formulae: [0, 100],
+    });
+    expect(data.dataValidations.find("C1")).toEqual({
+      type: "custom",
+      showErrorMessage: true,
+      errorStyle: "stop",
+      errorTitle: "Invalid",
+      error: "Must be a positive number",
+      formulae: ["ISNUMBER(C1)"],
+    });
+  });
+});
+
 describe("read path — typed errors", () => {
   it("throws InvalidPackageError on a truncated/corrupt zip", () => {
     expect(() => readWorkbookBuffer(new Uint8Array([1, 2, 3, 4, 5]))).toThrow(InvalidPackageError);

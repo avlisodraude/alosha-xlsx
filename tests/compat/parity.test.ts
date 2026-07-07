@@ -161,6 +161,20 @@ const corpus: CorpusCase[] = [
     },
     sample: { Sheet1: ["A1", "A2", "A3"] },
   },
+  {
+    name: "cell.dataValidation list dropdown",
+    build(wb) {
+      const ws = wb.addWorksheet("Sheet1");
+      ws.getCell("A1").value = "pick one";
+      ws.getCell("A1").dataValidation = {
+        type: "list",
+        allowBlank: true,
+        formulae: ['"Yes,No,Maybe"'],
+      };
+      ws.getCell("A2").value = "no validation";
+    },
+    sample: { Sheet1: ["A1", "A2"] },
+  },
 ];
 
 // --- sampling ------------------------------------------------------------------------------------
@@ -175,6 +189,7 @@ interface Sample {
    *  style objects). */
   bold: boolean;
   fillPattern: string | null;
+  dataValidation: unknown;
 }
 
 function normalizeCellValue(v: unknown): unknown {
@@ -216,6 +231,7 @@ function sampleCell(cell: AnyWorkbook): Sample {
     numFmt: cell.numFmt ?? null,
     bold: Boolean(font?.bold),
     fillPattern: normalizedFillPattern(cell.fill),
+    dataValidation: cell.dataValidation ?? null,
   };
 }
 

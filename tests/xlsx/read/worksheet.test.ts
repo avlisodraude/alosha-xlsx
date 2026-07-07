@@ -578,6 +578,24 @@ describe("parseWorksheet — data validations", () => {
     });
   });
 
+  it('defaults operator to "between" when absent on an operator type (ECMA-376/ExcelJS default)', () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<dataValidations count="1"><dataValidation type="decimal" sqref="B2">` +
+          `<formula1>0</formula1><formula2>100</formula2></dataValidation></dataValidations>`,
+      ),
+      ctx(),
+    );
+
+    expect(s.dataValidations.find("B2")).toEqual({
+      type: "decimal",
+      operator: "between",
+      formulae: [0, 100],
+    });
+  });
+
   it("keeps a non-numeric formula (cell ref) as a string for an operator type", () => {
     const s = sheet();
     parseWorksheet(

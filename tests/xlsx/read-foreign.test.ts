@@ -113,3 +113,74 @@ describe("read foreign — hyperlinks", () => {
     expect(cell.value).toEqual({ text: "Anthropic", hyperlink: "https://anthropic.com" });
   });
 });
+
+describe("read foreign — data validations", () => {
+  it("recovers a list dropdown written by exceljs", async (ctx) => {
+    const ExcelJS = await loadExcelJS();
+    if (!ExcelJS) {
+      ctx.skip();
+      return;
+    }
+
+    const src = new ExcelJS.Workbook();
+    const sheet = src.addWorksheet("Validated");
+    sheet.getCell("A1").dataValidation = {
+      type: "list",
+      allowBlank: true,
+      formulae: ['"Yes,No,Maybe"'],
+    };
+    // ExcelJS omits the `operator` attribute for its schema default ("between"); our reader must
+    // resolve it the same way exceljs itself does on read.
+    sheet.getCell("B1").dataValidation = {
+      type: "decimal",
+      operator: "between",
+      formulae: [0, 100],
+    };
+
+    const buffer = await src.xlsx.writeBuffer();
+    const bytes = new Uint8Array(buffer as ArrayBuffer);
+
+    const wb = readWorkbookBuffer(bytes);
+    const ws = wb.getWorksheet("Validated");
+    expect(ws).toBeDefined();
+    if (!ws) return;
+
+    expect(ws.getCell("A1").dataValidation).toEqual({
+      type: "list",
+      allowBlank: true,
+      formulae: ['"Yes,No,Maybe"'],
+    });
+    expect(ws.dataValidations.find("B1")).toEqual({
+      type: "decimal",
+      operator: "between",
+      formulae: [0, 100],
+    });
+  });
+
+  it("writes a dropdown that re-opens in exceljs with the constraint intact", async (ctx) => {
+    const ExcelJS = await loadExcelJS();
+    if (!ExcelJS) {
+      ctx.skip();
+      return;
+    }
+
+    const wb = new Workbook();
+    const ws = wb.addWorksheet("Validated");
+    ws.getCell("A1").dataValidation = {
+      type: "list",
+      allowBlank: true,
+      formulae: ['"Yes,No,Maybe"'],
+    };
+
+    const bytes = writeWorkbookBuffer(wb);
+    const loaded = new ExcelJS.Workbook();
+    await loaded.xlsx.load(Buffer.from(bytes));
+
+    const cell = loaded.getWorksheet("Validated").getCell("A1");
+    expect(cell.dataValidation).toEqual({
+      type: "list",
+      allowBlank: true,
+      formulae: ['"Yes,No,Maybe"'],
+    });
+  });
+});
