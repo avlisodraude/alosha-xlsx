@@ -28,7 +28,19 @@ export const CONTENT_TYPE = {
   theme: "application/vnd.openxmlformats-officedocument.theme+xml",
   coreProps: "application/vnd.openxmlformats-package.core-properties+xml",
   extProps: "application/vnd.openxmlformats-officedocument.extended-properties+xml",
+  drawing: "application/vnd.openxmlformats-officedocument.drawing+xml",
+  comments: "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml",
+  vmlDrawing: "application/vnd.openxmlformats-officedocument.vmlDrawing",
 } as const;
+
+/** Image content-type by lowercase file extension, for the media `<Default>`s (Track D). */
+export const IMAGE_CONTENT_TYPE: Record<string, string> = {
+  png: "image/png",
+  jpeg: "image/jpeg",
+  jpg: "image/jpeg",
+  gif: "image/gif",
+  bmp: "image/bmp",
+};
 
 /** Relationship-type URIs (the `Type=` attribute on each `<Relationship>`). */
 export const REL_TYPE = {
@@ -44,6 +56,10 @@ export const REL_TYPE = {
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings",
   theme: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme",
   hyperlink: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
+  drawing: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing",
+  comments: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments",
+  vmlDrawing: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing",
+  image: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
 } as const;
 
 /** Archive paths for the fixed (non-worksheet) parts. Worksheet paths are `xl/worksheets/sheetN.xml`. */
@@ -68,14 +84,17 @@ export interface WorkbookRel {
   target: string;
 }
 
-/** A single worksheet-level external relationship (e.g. a hyperlink). Its `rId` is local to the
- *  worksheet's own `.rels` namespace and must match the `r:id` emitted in the sheet's `<hyperlinks>`. */
+/** A single worksheet-level relationship — a hyperlink, or an internal child part (drawing, comments,
+ *  vmlDrawing, image). Its `rId` is local to the worksheet's own `.rels` namespace and must match the
+ *  `r:id` emitted in the sheet body (e.g. `<hyperlink r:id>`, `<drawing r:id>`). */
 export interface WorksheetRel {
   rId: string;
-  /** The link destination (e.g. `https://example.com`, `mailto:a@b.c`). */
+  /** A `REL_TYPE.*` URI (hyperlink, drawing, comments, …). */
+  type: string;
+  /** External URL, or an internal path relative to `xl/worksheets/` (e.g. `../drawings/drawing1.xml`). */
   target: string;
-  /** `TargetMode` attribute; external hyperlinks are always `"External"`. */
-  mode: "External";
+  /** `TargetMode` attribute — `"External"` for hyperlinks, omitted for internal rels. */
+  mode?: "External";
 }
 
 /** A worksheet's identity within the package: its position-derived file, its `r:id`, and model data. */

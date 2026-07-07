@@ -28,7 +28,7 @@ import { dateToSerial } from "../date.js";
 import type { SharedStrings } from "../shared-strings.js";
 import type { Styles } from "../styles.js";
 import type { WorksheetRel } from "./constants.js";
-import { NS } from "./constants.js";
+import { NS, REL_TYPE } from "./constants.js";
 import { renderWorksheetRels } from "./worksheet-rels.js";
 
 export interface WorksheetContext {
@@ -40,13 +40,52 @@ export interface WorksheetContext {
    *  workbook writer so priorities stay unique across sheets; a per-render fallback covers isolated
    *  part tests that construct a context without it. */
   nextPriority?: () => number;
+  /** 1-based position of this sheet in the workbook, set by the orchestrator per sheet. Lets child
+   *  parts (Tracks C/D) name themselves deterministically (`drawing${n}.xml`, `comments${n}.xml`, …).
+   *  Optional so isolated part tests can omit it. */
+  sheetNumber?: number;
 }
 
-/** The rendered worksheet plus its `.rels` doc, if the sheet has any relationships (hyperlinks). */
+/** An extra child part a worksheet contributes to the package — an XML sibling (comments, drawing) or
+ *  raw binary media (an image). The orchestrator writes it at `path` and folds its content-type into
+ *  `[Content_Types].xml`. Empty in F0; Tracks C/D are the first producers. */
+export interface ExtraPart {
+  /** Archive path, e.g. `xl/drawings/drawing1.xml` or `xl/media/image1.png`. */
+  path: string;
+  /** XML text (encoded by the orchestrator) or raw media bytes (passed through untouched). */
+  data: string | Uint8Array;
+  /** Emits an `<Override>` for this exact part (for XML parts with a non-`.xml` content-type). */
+  contentType?: string;
+  /** Emits a `<Default Extension>` covering media by extension (deduped across the workbook). */
+  defaultFor?: { extension: string; contentType: string };
+}
+
+/** The rendered worksheet, its unified `.rels` doc, and any extra child parts it owns. */
 export interface RenderedWorksheet {
   xml: string;
-  /** Rendered `xl/worksheets/_rels/sheetN.xml.rels`; `undefined` when the sheet has no hyperlinks. */
+  /** Rendered `xl/worksheets/_rels/sheetN.xml.rels`; `undefined` when the sheet has no rels. */
   rels?: string;
+  /** Child parts (XML + media) the sheet contributes; `undefined` when it owns none. */
+  extraParts?: ExtraPart[];
+}
+
+/** A worksheet's single relationship-id source: one rId namespace (`rId1, rId2, …`) and one `rels`
+ *  accumulator shared by every feature (hyperlinks first, then Tracks C/D), so pushed rels never
+ *  collide on rIds. */
+export interface SheetRelAllocator {
+  /** Hand out the next local `rId${n}` for this sheet. */
+  next(): string;
+  /** The accumulated rels, in allocation order; fed once to `renderWorksheetRels`. */
+  readonly rels: WorksheetRel[];
+}
+
+function createSheetRelAllocator(): SheetRelAllocator {
+  const rels: WorksheetRel[] = [];
+  let n = 0;
+  return {
+    next: () => `rId${++n}`,
+    rels,
+  };
 }
 
 /** A cell hyperlink collected during the sheetData pass, emitted as a `<hyperlink>` after merges. */
@@ -74,6 +113,11 @@ export function renderWorksheet(ws: Worksheet, ctx: WorksheetContext): RenderedW
     defaultColWidth: model.properties.defaultColWidth,
   });
 
+  // One rId source and one extra-parts accumulator for the whole sheet — hyperlinks are the first
+  // rel contributor; Tracks C/D push more rels + parts through the same seam without colliding.
+  const alloc = createSheetRelAllocator();
+  const extraParts: ExtraPart[] = [];
+
   const hyperlinks: HyperlinkRecord[] = [];
   renderCols(w, model.columns, ctx);
   renderSheetData(w, model.rows, ctx, hyperlinks);
@@ -84,10 +128,15 @@ export function renderWorksheet(ws: Worksheet, ctx: WorksheetContext): RenderedW
   // CT_Worksheet order: `<conditionalFormatting>` sits between `<mergeCells>` and `<dataValidations>`.
   renderConditionalFormatting(w, model.conditionalFormattings, ctx);
   renderDataValidations(w, model.dataValidations);
-  const rels = renderHyperlinks(w, hyperlinks);
+  renderHyperlinks(w, hyperlinks, alloc);
 
   w.close("worksheet");
-  return { xml: w.toString(), rels };
+  const rels = alloc.rels.length > 0 ? renderWorksheetRels(alloc.rels) : undefined;
+  return {
+    xml: w.toString(),
+    rels,
+    extraParts: extraParts.length > 0 ? extraParts : undefined,
+  };
 }
 
 /** Emit `<sheetViews><sheetView>…</sheetView></sheetViews>`, adding a `<pane>` child when the first
@@ -522,20 +571,21 @@ function renderDataValidations(w: XmlWriter, validations: DataValidationModel[] 
   w.close("dataValidations");
 }
 
-/** Emit the `<hyperlinks>` block, assigning each link a worksheet-local `rId${n}`. Returns the
- *  matching `.rels` doc (or `undefined` when the sheet has no hyperlinks), so the same rId space
- *  backs both the `<hyperlink r:id>` and the relationship `Id`. */
-function renderHyperlinks(w: XmlWriter, hyperlinks: HyperlinkRecord[]): string | undefined {
-  if (hyperlinks.length === 0) return undefined;
+/** Emit the `<hyperlinks>` block, drawing each link's `r:id` from the shared sheet allocator and
+ *  pushing a matching external rel — so the same rId backs both `<hyperlink r:id>` and its
+ *  `<Relationship Id>`. Hyperlinks are the first consumer of the allocator's rId namespace. */
+function renderHyperlinks(
+  w: XmlWriter,
+  hyperlinks: HyperlinkRecord[],
+  alloc: SheetRelAllocator,
+): void {
+  if (hyperlinks.length === 0) return;
 
-  const rels: WorksheetRel[] = [];
   w.open("hyperlinks");
-  hyperlinks.forEach((h, i) => {
-    const rId = `rId${i + 1}`;
+  for (const h of hyperlinks) {
+    const rId = alloc.next();
     w.leaf("hyperlink", { ref: h.ref, "r:id": rId, tooltip: h.tooltip });
-    rels.push({ rId, target: h.target, mode: "External" });
-  });
+    alloc.rels.push({ rId, type: REL_TYPE.hyperlink, target: h.target, mode: "External" });
+  }
   w.close("hyperlinks");
-
-  return renderWorksheetRels(rels);
 }

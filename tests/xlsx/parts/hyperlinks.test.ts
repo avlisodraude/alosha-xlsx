@@ -80,8 +80,8 @@ describe("worksheet writer — hyperlinks", () => {
 describe("renderWorksheetRels", () => {
   it("renders external hyperlink relationships (golden)", () => {
     const rels: WorksheetRel[] = [
-      { rId: "rId1", target: "https://example.com", mode: "External" },
-      { rId: "rId2", target: "mailto:a@b.c", mode: "External" },
+      { rId: "rId1", type: REL_TYPE.hyperlink, target: "https://example.com", mode: "External" },
+      { rId: "rId2", type: REL_TYPE.hyperlink, target: "mailto:a@b.c", mode: "External" },
     ];
     expect(renderWorksheetRels(rels)).toBe(
       '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
@@ -94,7 +94,12 @@ describe("renderWorksheetRels", () => {
 
   it("escapes ampersands in the target URL", () => {
     const rels: WorksheetRel[] = [
-      { rId: "rId1", target: "https://example.com/?a=1&b=2", mode: "External" },
+      {
+        rId: "rId1",
+        type: REL_TYPE.hyperlink,
+        target: "https://example.com/?a=1&b=2",
+        mode: "External",
+      },
     ];
     expect(renderWorksheetRels(rels)).toContain("https://example.com/?a=1&amp;b=2");
   });

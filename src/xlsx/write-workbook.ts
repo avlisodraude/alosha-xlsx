@@ -17,9 +17,46 @@ import { renderRootRels } from "./parts/root-rels.js";
 import { renderTheme } from "./parts/theme.js";
 import { renderWorkbook } from "./parts/workbook.js";
 import { renderWorkbookRels } from "./parts/workbook-rels.js";
-import { type RenderedWorksheet, renderWorksheet } from "./parts/worksheet.js";
+import {
+  type RenderedWorksheet,
+  renderWorksheet,
+  type WorksheetContext,
+} from "./parts/worksheet.js";
 import { createSharedStrings } from "./shared-strings.js";
 import { createStyles, type Styles } from "./styles.js";
+
+/** The worksheet child parts gathered across every sheet, ready to fold into the archive and its
+ *  `[Content_Types].xml`. See {@link collectWorksheetParts}. */
+export interface CollectedParts {
+  /** Archive path -> bytes (already-encoded XML parts and raw media). */
+  media: Map<string, Uint8Array>;
+  extraDefaults: { extension: string; contentType: string }[];
+  extraOverrides: { partName: string; contentType: string }[];
+}
+
+/** Walk each rendered worksheet's `extraParts`, encoding string data via `enc` and passing raw bytes
+ *  through untouched into `media`, and gather each part's `contentType` (as an `<Override>`, partName
+ *  `/${path}`) and `defaultFor` (as a `<Default>`). Pure — the testable seam Tracks C/D build on. */
+export function collectWorksheetParts(
+  rendered: Iterable<RenderedWorksheet>,
+  enc: InstanceType<typeof TextEncoder>,
+): CollectedParts {
+  const media = new Map<string, Uint8Array>();
+  const extraDefaults: { extension: string; contentType: string }[] = [];
+  const extraOverrides: { partName: string; contentType: string }[] = [];
+
+  for (const { extraParts } of rendered) {
+    if (!extraParts) continue;
+    for (const part of extraParts) {
+      media.set(part.path, typeof part.data === "string" ? enc.encode(part.data) : part.data);
+      if (part.contentType) {
+        extraOverrides.push({ partName: `/${part.path}`, contentType: part.contentType });
+      }
+      if (part.defaultFor) extraDefaults.push(part.defaultFor);
+    }
+  }
+  return { media, extraDefaults, extraOverrides };
+}
 
 export interface WriteOptions {
   /** Emit a shared-string table (string cells store an index). When `false`, strings render inline.
@@ -55,7 +92,7 @@ export function writeWorkbookBuffer(wb: Workbook, options?: WriteOptions): Uint8
   // Conditional-format rules with no explicit priority draw from a single workbook-monotonic counter,
   // shared across every sheet's render pass (mirrors ExcelJS).
   let cfPriority = 0;
-  const ctx = {
+  const ctx: WorksheetContext = {
     styles: cellStyles,
     sharedStrings,
     useSharedStrings,
@@ -63,9 +100,11 @@ export function writeWorkbookBuffer(wb: Workbook, options?: WriteOptions): Uint8
     nextPriority: () => ++cfPriority,
   };
 
-  // 1. Worksheets first — this is what fills the shared-strings and styles pools.
+  // 1. Worksheets first — this is what fills the shared-strings and styles pools. `sheetNumber` is the
+  //    1-based position so any child parts can name themselves deterministically.
   const worksheetXml = new Map<string, RenderedWorksheet>();
   worksheets.forEach((ws, i) => {
+    ctx.sheetNumber = i + 1;
     worksheetXml.set(sheetRels[i]!.fileName, renderWorksheet(ws, ctx));
   });
 
@@ -99,9 +138,18 @@ export function writeWorkbookBuffer(wb: Workbook, options?: WriteOptions): Uint8
   const entries: ZipEntries = new Map();
   const put = (path: string, xml: string) => entries.set(path, enc.encode(xml));
 
+  // Gather worksheet child parts (empty unless a feature contributed any) so their content-type
+  // Defaults/Overrides can fold into `[Content_Types].xml` and their bytes into the archive.
+  const collected = collectWorksheetParts(worksheetXml.values(), enc);
+
   put(
     PART_PATH.contentTypes,
-    renderContentTypes({ worksheetFiles: sheetRels.map((s) => s.fileName), hasSharedStrings }),
+    renderContentTypes({
+      worksheetFiles: sheetRels.map((s) => s.fileName),
+      hasSharedStrings,
+      extraDefaults: collected.extraDefaults,
+      extraOverrides: collected.extraOverrides,
+    }),
   );
   put(PART_PATH.rootRels, renderRootRels());
   put(PART_PATH.coreProps, renderCoreProps(wb));
@@ -123,6 +171,9 @@ export function writeWorkbookBuffer(wb: Workbook, options?: WriteOptions): Uint8
     // [Content_Types].xml, so no content-types change is needed.
     if (rels !== undefined) put(`xl/worksheets/_rels/${file}.rels`, rels);
   }
+  // Worksheet child parts (XML already encoded, media raw) land at their declared paths — once, not
+  // per sheet. Empty in the common case, leaving the archive byte-identical.
+  for (const [path, bytes] of collected.media) entries.set(path, bytes);
 
   return writeZipArchive(entries);
 }
