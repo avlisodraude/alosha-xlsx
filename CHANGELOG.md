@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.11.1
+
+### Patch Changes
+
+- 75a10e6: docs: homepage → xlsx.alosha.dev, live demo link.
+
+  `package.json` `homepage` now points at `https://xlsx.alosha.dev` (was the GitHub `#readme`
+  anchor), so the npm package page's "Homepage" link resolves to the project site. The README
+  gains a top-of-file live demo link and badge (`https://xlsx.alosha.dev/demo`) so it surfaces on
+  the npm page too.
+
 ## 0.11.0
 
 ### Minor Changes
@@ -28,7 +39,7 @@
     `removeConditionalFormatting` now accepts ExcelJS's index, predicate, and no-argument
     (clear-all) forms, resolved onto the core's by-ref removal. The text-contains family is
     bridged bidirectionally: ExcelJS's `{ type: "containsText", operator: "beginsWith" | "endsWith"
-    | "notContains" | "containsText" }` shape normalizes to the core's per-variant `type` on
+| "notContains" | "containsText" }` shape normalizes to the core's per-variant `type` on
     `addConditionalFormatting`, and `conditionalFormattings` always reads back the ExcelJS shape.
 
   - **Lint cleanup:** removed the last `noNonNullAssertion` warning in the buffered write

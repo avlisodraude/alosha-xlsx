@@ -1,6 +1,6 @@
 {
   "name": "@alosha/xlsx",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "A modern TypeScript library for reading and writing XLSX spreadsheets, inspired by exceljs.",
   "keywords": [
     "xlsx",
@@ -17,7 +17,7 @@
     "type": "git",
     "url": "git+https://github.com/avlisodraude/alosha-xlsx.git"
   },
-  "homepage": "https://github.com/avlisodraude/alosha-xlsx#readme",
+  "homepage": "https://xlsx.alosha.dev",
   "bugs": "https://github.com/avlisodraude/alosha-xlsx/issues",
   "type": "module",
   "sideEffects": [
