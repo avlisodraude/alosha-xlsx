@@ -11,8 +11,13 @@
 import { Range } from "../address/index.js";
 import { InvalidImageAnchorError } from "../errors.js";
 
-/** Media formats supported in v1 (SVG / EMF / WMF are deferred — see spec §0). */
-export type ImageExtension = "png" | "jpeg" | "gif";
+/**
+ * Media formats supported in v1 (SVG / EMF / WMF are deferred — see spec §0). This union MUST stay in
+ * sync with the keys of `IMAGE_CONTENT_TYPE` (`src/xlsx/parts/constants.ts`) so the writer's
+ * `IMAGE_CONTENT_TYPE[ext]` lookup type-checks without a cast; kept as a literal here rather than
+ * imported so the model layer carries no dependency on the xlsx writer.
+ */
+export type ImageExtension = "png" | "jpeg" | "jpg" | "gif" | "bmp";
 
 /** Arguments to `workbook.addImage` — the raw bytes plus their format. */
 export interface AddImageOptions {

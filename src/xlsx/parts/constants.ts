@@ -15,6 +15,8 @@ export const NS = {
   dcterms: "http://purl.org/dc/terms/",
   dcmitype: "http://purl.org/dc/dcmitype/",
   xsi: "http://www.w3.org/2001/XMLSchema-instance",
+  drawingSpreadsheet: "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing",
+  drawingMain: "http://schemas.openxmlformats.org/drawingml/2006/main",
 } as const;
 
 /** Part content types (`[Content_Types].xml` overrides + the two defaults). */
