@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.10.0
+
+### Minor Changes
+
+- Streaming `WorkbookWriter` (write-only, ExcelJS `stream.xlsx.WorkbookWriter`-shaped): add a sheet,
+  commit rows one at a time, and each row's XML is deflated straight into the output archive —
+  bounded memory for large workbooks. At 500k rows × 5 cols it holds ~15.6× less peak memory than
+  the buffered writer at ~1.9× the throughput (`pnpm bench:stream`, BENCHMARKS.md).
+
+  ```ts
+  const wb = new WorkbookWriter({ filename }); // or { stream }, or neither → AsyncIterable<Uint8Array>
+  const ws = wb.addWorksheet("Data");
+  ws.addRow([1, "a", new Date()]).commit(); // flushed now
+  ws.commit();
+  await wb.commit();
+  ```
+
+  - **Sinks.** A Node `Writable`/`filename` (backpressure-honouring, `node:fs` imported lazily), or —
+    with no destination — the writer itself is an `AsyncIterable<Uint8Array>` of archive chunks
+    (browser/edge-safe; no `node:*` on that path).
+  - **Memory model.** Defaults `useSharedStrings: false` (inline `<is>` strings) so a committed row
+    retains nothing — the one thing OOXML would force into memory is the shared-string table, written
+    after all sheets. Opt in to `useSharedStrings: true` and rows still stream; only the string table
+    is held.
+  - **Parity.** Full buffered-writer feature coverage — values (string/number/boolean/date/error/
+    formula/rich text/hyperlink), styles, merges, panes + auto-filter, data validation, conditional
+    formatting, comments, images — asserted structurally equal to `writeWorkbookBuffer` per feature;
+    `<dimension>` is intentionally omitted (extent unknown until the last row).
+  - **Docs.** New `docs/STREAMING.md` usage guide + README section.
+
+  **Known limitations:** write-only (no streaming `WorkbookReader` yet); column widths / `<cols>` are
+  not yet supported in streaming mode (`getColumn`/`columns` intentionally not exposed) — a planned
+  follow-up; `ExcelJS.stream.xlsx.WorkbookWriter` in `@alosha/xlsx/compat` still throws — import
+  `WorkbookWriter` from the main entry instead.
+
 ## 0.9.0
 
 ### Minor Changes
