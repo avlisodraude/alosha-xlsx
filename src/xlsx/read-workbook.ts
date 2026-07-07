@@ -39,7 +39,7 @@ export function readWorkbookBuffer(bytes: Uint8Array, _options?: ReadOptions): W
   if (header.date1904) wb.properties.date1904 = true;
   if (header.activeTab !== undefined) wb.views = [{ activeTab: header.activeTab }];
 
-  const ctx = { sharedStrings, styles, date1904: header.date1904 };
+  const ctx = { sharedStrings, styles, date1904: header.date1904, readPart: pkg.text };
 
   for (const sheet of header.sheets) {
     const ws = wb.addWorksheet(sheet.name, { state: sheet.state });

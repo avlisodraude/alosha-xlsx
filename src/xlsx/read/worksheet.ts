@@ -46,6 +46,8 @@ import {
 } from "../../model/index.js";
 import { cursor, localName, type XmlCursor, type XmlEvent } from "../../xml/index.js";
 import { serialToDate } from "../date.js";
+import { REL_TYPE } from "../parts/constants.js";
+import { parseComments } from "./comments.js";
 import type { ResolvedRel } from "./package.js";
 import { parseRichString } from "./shared-strings.js";
 import type { StyleTable } from "./styles.js";
@@ -57,6 +59,10 @@ export interface WorksheetReadContext {
   /** This worksheet's own relationships (rId -> {type, target, mode}), used to resolve
    *  `<hyperlinks>` entries. `undefined`/absent means hyperlinks are left as plain string cells. */
   rels?: Map<string, ResolvedRel>;
+  /** Fetches another package part's decoded text by its resolved path (as found in `rels`' targets),
+   *  e.g. the `comments{n}.xml` the sheet's `comments` rel points at. `undefined`/absent, or a path
+   *  with no such part, means comments are left unread (docs/COMMENTS-SPEC.md §2). */
+  readPart?: (path: string) => string | undefined;
 }
 
 type OpenEvent = Extract<XmlEvent, { kind: "open" }>;
@@ -88,6 +94,7 @@ export function parseWorksheet(ws: Worksheet, xml: string, ctx: WorksheetReadCon
   const hyperlinks: HyperlinkRef[] = [];
   const dataValidations: DataValidationRef[] = [];
   const conditionalFormattings: ConditionalFormatting[] = [];
+  let legacyDrawingRid: string | undefined;
 
   c.eachChild(ev.name, (child) => {
     switch (localName(child.name)) {
@@ -116,6 +123,10 @@ export function parseWorksheet(ws: Worksheet, xml: string, ctx: WorksheetReadCon
       case "hyperlinks":
         if (!child.selfClosing) collectHyperlinks(c, child.name, hyperlinks);
         break;
+      case "legacyDrawing":
+        legacyDrawingRid = relId(child);
+        if (!child.selfClosing) c.textUntilClose(child.name);
+        break;
       default:
         if (!child.selfClosing) c.textUntilClose(child.name);
     }
@@ -134,6 +145,7 @@ export function parseWorksheet(ws: Worksheet, xml: string, ctx: WorksheetReadCon
   if (ctx.rels) {
     for (const link of hyperlinks) applyHyperlink(ws, link, ctx.rels);
   }
+  applyComments(ws, legacyDrawingRid, ctx);
 }
 
 /** Inverse of `renderSheetViews` (src/xlsx/parts/worksheet.ts): reads the sheet's single `<sheetView>`
@@ -805,6 +817,35 @@ function applyHyperlink(ws: Worksheet, link: HyperlinkRef, rels: Map<string, Res
     link.tooltip !== undefined
       ? { text, hyperlink: rel.target, tooltip: link.tooltip }
       : { text, hyperlink: rel.target };
+}
+
+/** Follow the sheet's `<legacyDrawing r:id>` (docs/COMMENTS-SPEC.md §2) to confirm a VML note anchor
+ *  exists — the VML is anchor-only, so its content is never fetched — then resolve the sheet's
+ *  separate `comments` rel (not referenced by any worksheet element, only discoverable by rel type,
+ *  mirroring the writer which allocates it alongside but never embeds its rId) to `comments{n}.xml`
+ *  and apply its records to `cell.note`. A missing `<legacyDrawing>`, an unresolved rel, or an absent
+ *  part leaves every cell without a note; a comment with a malformed `ref` is skipped — none of this
+ *  ever throws. */
+function applyComments(
+  ws: Worksheet,
+  legacyDrawingRid: string | undefined,
+  ctx: WorksheetReadContext,
+): void {
+  if (legacyDrawingRid === undefined || !ctx.rels || !ctx.readPart) return;
+  if (!ctx.rels.get(legacyDrawingRid)) return;
+
+  const commentsRel = [...ctx.rels.values()].find((r) => r.type === REL_TYPE.comments);
+  if (!commentsRel) return;
+  const commentsXml = ctx.readPart(commentsRel.target);
+  if (commentsXml === undefined) return;
+
+  for (const record of parseComments(commentsXml)) {
+    try {
+      ws.getCell(record.ref).note = { texts: record.texts, author: record.author };
+    } catch {
+      // Malformed ref (InvalidAddressError from decodeAddress) — skip this comment, keep the rest.
+    }
+  }
 }
 
 /** The `r:id` relationship reference on a `<hyperlink>` element. OOXML fixes the `r` prefix, but

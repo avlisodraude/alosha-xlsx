@@ -453,6 +453,45 @@ describe("read path — typed errors", () => {
   });
 });
 
+describe("read round-trip — comments (docs/COMMENTS-SPEC.md §2)", () => {
+  it("persists a plain-string note, a rich-text note, and a multi-author sheet intact", () => {
+    const wb = new Workbook();
+    const ws = wb.addWorksheet("Notes");
+    ws.getCell("B2").note = { texts: "hello" };
+    ws.getCell("C3").note = {
+      texts: { richText: [{ text: "bold", font: { bold: true } }, { text: " plain" }] },
+      author: "Alice",
+    };
+    ws.getCell("A1").note = { texts: "one", author: "Alice" };
+    ws.getCell("A2").note = { texts: "two", author: "Bob" };
+    ws.getCell("A3").note = { texts: "three", author: "Alice" };
+
+    const back = readWorkbookBuffer(writeWorkbookBuffer(wb));
+    const data = back.getWorksheet("Notes");
+    if (!data) throw new Error("Notes sheet missing");
+
+    // Author defaults to "Author" (ExcelJS parity) when unset at write time.
+    expect(data.getCell("B2").note).toEqual({ texts: "hello", author: "Author" });
+    expect(data.getCell("C3").note).toEqual({
+      texts: { richText: [{ text: "bold", font: { bold: true } }, { text: " plain" }] },
+      author: "Alice",
+    });
+    expect(data.getCell("A1").note).toEqual({ texts: "one", author: "Alice" });
+    expect(data.getCell("A2").note).toEqual({ texts: "two", author: "Bob" });
+    expect(data.getCell("A3").note).toEqual({ texts: "three", author: "Alice" });
+
+    // A cell with no comment carries no note.
+    expect(data.getCell("D4").note).toBeUndefined();
+  });
+
+  it("leaves a no-comments sheet with no notes and no <legacyDrawing>", () => {
+    const back = readWorkbookBuffer(writeWorkbookBuffer(fixture()));
+    const data = back.getWorksheet("Data");
+    if (!data) throw new Error("Data sheet missing");
+    expect(data.getCell("A1").note).toBeUndefined();
+  });
+});
+
 describe("read path — public accessor", () => {
   it("workbook.xlsx.load mutates the receiver in place and returns it", async () => {
     const bytes = writeWorkbookBuffer(fixture());
