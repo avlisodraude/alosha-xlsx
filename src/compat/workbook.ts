@@ -41,10 +41,18 @@ import {
   CellType,
   type Comment,
   type ConditionalFormatting,
+  type ImageAnchor,
   type ImageExtension,
   type RichTextRun,
+  type RowValues,
   type Style,
+  type WorksheetView,
 } from "../model/index.js";
+import {
+  WorkbookWriter as CoreStreamWorkbookWriter,
+  type WorksheetWriter as CoreStreamWorksheetWriter,
+  type NodeWritableLike,
+} from "../xlsx/stream/index.js";
 import { applyExcelJsStyle } from "./style-compat.js";
 import { toExcelJSValueType } from "./value-type.js";
 
@@ -98,21 +106,13 @@ const WORKSHEET_UNSUPPORTED = new Set([
   "unprotect",
 ]);
 
-/** Streaming entry points hung off the ExcelJS namespace (`ExcelJS.stream.xlsx.*`); each throws. */
-export const streamStub = {
-  xlsx: {
-    WorkbookWriter: class {
-      constructor() {
-        throw new UnsupportedFeatureError("stream.xlsx.WorkbookWriter", COMPAT_DEFER);
-      }
-    },
-    WorkbookReader: class {
-      constructor() {
-        throw new UnsupportedFeatureError("stream.xlsx.WorkbookReader", COMPAT_DEFER);
-      }
-    },
-  },
-} as const;
+/** `stream.xlsx.WorkbookReader` has no streaming counterpart yet (see docs/STREAMING.md) — still a
+ *  throwing stub. `WorkbookWriter` is bridged for real below (see {@link compatStream}). */
+class StreamWorkbookReaderStub {
+  constructor() {
+    throw new UnsupportedFeatureError("stream.xlsx.WorkbookReader", COMPAT_DEFER);
+  }
+}
 
 // --- facade plumbing ----------------------------------------------------------------------------
 
@@ -359,6 +359,245 @@ function toAddImageOptions(image: unknown): { buffer: Uint8Array; extension: Ima
 function toExcelJsMedia(image: { buffer: Uint8Array; extension: ImageExtension }): unknown {
   return { type: "image", ...image };
 }
+
+// --- streaming writer (docs/STREAMING.md; ExcelJS's `stream.xlsx.WorkbookWriter`) ----------------
+//
+// Bridges onto our own `xlsx/stream/workbook-writer.ts` `WorkbookWriter`, which is already
+// ExcelJS-shaped: `addWorksheet()` → `ws.addRow(...).commit()` → `ws.commit()` → `await
+// workbook.commit()`. Rows/cells crossing the boundary are real model `Row`/`Cell` instances, so
+// reusing {@link wrap} gives them `cell.type` ExcelJS numbers, whole-object style setters, and
+// `cell.note` bridging for free — the same as the buffered facade, with no extra plumbing. Only the
+// constructor/`addWorksheet` *options* need bridging (or a loud `UnsupportedFeatureError` where our
+// streaming writer has no equivalent), since those are plain data ExcelJS accepts that our own
+// `WorkbookWriterOptions`/`addWorksheet` signature doesn't structurally share.
+
+/** Real-ExcelJS `stream.xlsx.WorkbookWriter` constructor options with no equivalent on our streaming
+ *  writer: `zip` (archiver-specific tuning) and `lastPrinted` (unlike the buffered `Workbook`, the
+ *  streaming writer's doc-metadata surface doesn't track it). */
+const STREAM_WORKBOOK_UNSUPPORTED_OPTIONS = ["zip", "lastPrinted"] as const;
+
+/** Real-ExcelJS `addWorksheet(name, options)` keys with no equivalent on our streaming worksheet
+ *  writer: `pageSetup`/`headerFooter` (printing config; unimplemented for streaming) and a per-sheet
+ *  `useSharedStrings` override (only a workbook-wide setting exists). */
+const STREAM_WORKSHEET_UNSUPPORTED_OPTIONS = [
+  "pageSetup",
+  "headerFooter",
+  "useSharedStrings",
+] as const;
+
+class CompatWorksheetWriter {
+  #raw: CoreStreamWorksheetWriter;
+  constructor(raw: CoreStreamWorksheetWriter) {
+    this.#raw = raw;
+  }
+
+  get name(): string {
+    return this.#raw.name;
+  }
+  /** ExcelJS's field is `committed`, not our `isCommitted`. */
+  get committed(): boolean {
+    return this.#raw.isCommitted;
+  }
+  get views(): WorksheetView[] {
+    return this.#raw.views;
+  }
+  set views(v: WorksheetView[]) {
+    this.#raw.views = v;
+  }
+  get autoFilter(): string | undefined {
+    return this.#raw.autoFilter;
+  }
+  set autoFilter(v: unknown) {
+    this.#raw.autoFilter = normalizeAutoFilter(v) as string | undefined;
+  }
+  get properties(): CoreStreamWorksheetWriter["properties"] {
+    return this.#raw.properties;
+  }
+  get dataValidations(): CoreStreamWorksheetWriter["dataValidations"] {
+    return this.#raw.dataValidations;
+  }
+
+  mergeCells(...cells: unknown[]): void {
+    this.#raw.mergeCells(...cells);
+  }
+
+  /** §4 colour-shape + text-family bridge, same as the buffered worksheet's `addConditionalFormatting`. */
+  addConditionalFormatting(cf: unknown): unknown {
+    const added = this.#raw.addConditionalFormatting(
+      normalizeConditionalFormatting(cf) as ConditionalFormatting,
+    );
+    return wrap({ ...added, rules: added.rules.map(denormalizeCfRule) });
+  }
+
+  addImage(imageId: number, anchor: ImageAnchor): void {
+    this.#raw.addImage(imageId, anchor);
+  }
+
+  /** The returned row is a real model `Row` (plus `commit()`); `wrap` proxies it exactly like the
+   *  buffered facade's rows (ExcelJS `cell.type` numbers, whole-object style setters, `cell.note`). */
+  addRow(data: RowValues): Row & { commit(): void } {
+    return wrap(this.#raw.addRow(data)) as Row & { commit(): void };
+  }
+
+  commit(): void {
+    this.#raw.commit();
+  }
+}
+
+class CompatWorkbookWriter implements AsyncIterable<Uint8Array> {
+  #raw: CoreStreamWorkbookWriter;
+
+  constructor(options?: unknown) {
+    const opts = (options ?? {}) as Record<string, unknown>;
+    for (const key of STREAM_WORKBOOK_UNSUPPORTED_OPTIONS) {
+      if (key in opts) {
+        throw new UnsupportedFeatureError(
+          `stream.xlsx.WorkbookWriter option "${key}"`,
+          COMPAT_DEFER,
+        );
+      }
+    }
+    this.#raw = new CoreStreamWorkbookWriter({
+      filename: opts.filename as string | undefined,
+      stream: opts.stream as NodeWritableLike | undefined,
+      useSharedStrings: opts.useSharedStrings as boolean | undefined,
+      useStyles: opts.useStyles as boolean | undefined,
+    });
+    if (opts.creator !== undefined) this.#raw.creator = opts.creator as string;
+    if (opts.lastModifiedBy !== undefined) this.#raw.lastModifiedBy = opts.lastModifiedBy as string;
+    if (opts.created !== undefined) this.#raw.created = opts.created as Date;
+    if (opts.modified !== undefined) this.#raw.modified = opts.modified as Date;
+  }
+
+  addWorksheet(name?: string, options?: unknown): CompatWorksheetWriter {
+    const opts = (options ?? {}) as Record<string, unknown>;
+    for (const key of STREAM_WORKSHEET_UNSUPPORTED_OPTIONS) {
+      if (key in opts) {
+        throw new UnsupportedFeatureError(`worksheet option "${key}" (streaming)`, COMPAT_DEFER);
+      }
+    }
+    const state = opts.state as "visible" | "hidden" | "veryHidden" | undefined;
+    const ws = this.#raw.addWorksheet(name, state === undefined ? undefined : { state });
+
+    // `properties` (and the deprecated top-level `tabColor` shorthand ExcelJS itself folds into it)
+    // and `views`/`autoFilter` all have a post-construction equivalent on our streaming worksheet, so
+    // apply them here instead of at core-`addWorksheet` time.
+    const properties = { ...(opts.properties as Record<string, unknown> | undefined) };
+    if (opts.tabColor !== undefined) properties.tabColor = opts.tabColor;
+    if (Object.keys(properties).length > 0) Object.assign(ws.properties, properties);
+    if (opts.views !== undefined) ws.views = opts.views as WorksheetView[];
+    if (opts.autoFilter !== undefined) {
+      ws.autoFilter = normalizeAutoFilter(opts.autoFilter) as string | undefined;
+    }
+    return new CompatWorksheetWriter(ws);
+  }
+
+  addImage(image: unknown): number {
+    return this.#raw.addImage(toAddImageOptions(image));
+  }
+
+  async commit(): Promise<void> {
+    await this.#raw.commit();
+  }
+
+  [Symbol.asyncIterator](): AsyncIterator<Uint8Array> {
+    return this.#raw[Symbol.asyncIterator]();
+  }
+
+  get creator(): string | undefined {
+    return this.#raw.creator;
+  }
+  set creator(v: string | undefined) {
+    this.#raw.creator = v;
+  }
+  get lastModifiedBy(): string | undefined {
+    return this.#raw.lastModifiedBy;
+  }
+  set lastModifiedBy(v: string | undefined) {
+    this.#raw.lastModifiedBy = v;
+  }
+  get created(): Date {
+    return this.#raw.created;
+  }
+  set created(v: Date) {
+    this.#raw.created = v;
+  }
+  get modified(): Date {
+    return this.#raw.modified;
+  }
+  set modified(v: Date) {
+    this.#raw.modified = v;
+  }
+  get title(): string | undefined {
+    return this.#raw.title;
+  }
+  set title(v: string | undefined) {
+    this.#raw.title = v;
+  }
+  get subject(): string | undefined {
+    return this.#raw.subject;
+  }
+  set subject(v: string | undefined) {
+    this.#raw.subject = v;
+  }
+  get keywords(): string | undefined {
+    return this.#raw.keywords;
+  }
+  set keywords(v: string | undefined) {
+    this.#raw.keywords = v;
+  }
+  get category(): string | undefined {
+    return this.#raw.category;
+  }
+  set category(v: string | undefined) {
+    this.#raw.category = v;
+  }
+  get description(): string | undefined {
+    return this.#raw.description;
+  }
+  set description(v: string | undefined) {
+    this.#raw.description = v;
+  }
+  get company(): string | undefined {
+    return this.#raw.company;
+  }
+  set company(v: string | undefined) {
+    this.#raw.company = v;
+  }
+  get manager(): string | undefined {
+    return this.#raw.manager;
+  }
+  set manager(v: string | undefined) {
+    this.#raw.manager = v;
+  }
+  get properties(): CoreStreamWorkbookWriter["properties"] {
+    return this.#raw.properties;
+  }
+  set properties(v: CoreStreamWorkbookWriter["properties"]) {
+    this.#raw.properties = v;
+  }
+  get calcProperties(): CoreStreamWorkbookWriter["calcProperties"] {
+    return this.#raw.calcProperties;
+  }
+  set calcProperties(v: CoreStreamWorkbookWriter["calcProperties"]) {
+    this.#raw.calcProperties = v;
+  }
+  get views(): CoreStreamWorkbookWriter["views"] {
+    return this.#raw.views;
+  }
+  set views(v: CoreStreamWorkbookWriter["views"]) {
+    this.#raw.views = v;
+  }
+}
+
+/** The ExcelJS namespace's `stream.xlsx.*` entry points. `WorkbookWriter` is a real bridge (above);
+ *  `WorkbookReader` stays a throwing stub (no streaming reader yet). */
+export const compatStream = {
+  xlsx: {
+    WorkbookWriter: CompatWorkbookWriter,
+    WorkbookReader: StreamWorkbookReaderStub,
+  },
+} as const;
 
 // --- the per-level proxies ----------------------------------------------------------------------
 

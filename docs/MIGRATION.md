@@ -100,6 +100,25 @@ against real ExcelJS directly: real ExcelJS's own `worksheet.getImages()` return
 `worksheet` back-reference), not the plain `{ col, row }` object `@alosha/xlsx/compat`'s
 `getImages()` returns — reload through real `exceljs` if you need that exact shape.
 
+**D6 — `stream.xlsx.WorkbookWriter` is a real bridge onto our own streaming writer; a few
+constructor/`addWorksheet` options with no equivalent throw instead of silently no-op'ing.**
+`new ExcelJS.stream.xlsx.WorkbookWriter(options)` maps `filename`/`stream`/`useSharedStrings`/
+`useStyles` straight onto our own `xlsx/stream` `WorkbookWriter` (docs/STREAMING.md) and applies
+`creator`/`lastModifiedBy`/`created`/`modified` as a post-construction assignment (our streaming
+writer has matching setters, just no constructor form for them). The lifecycle is the same as real
+ExcelJS: `addWorksheet()` → `ws.addRow(...).commit()` → `ws.commit()` → `await workbook.commit()`,
+and the workbook is itself an `AsyncIterable<Uint8Array>` when neither `filename` nor `stream` is
+given. Rows/cells crossing the boundary are real model objects, so they get the same proxying as the
+buffered facade for free (ExcelJS `cell.type` numbers, whole-object style setters, `cell.note`
+bridging, the §4 conditional-formatting colour/text-family bridge, ExcelJS's `{from,to}` `autoFilter`
+form). Two constructor options and three `addWorksheet` options have **no equivalent** on the
+streaming writer and throw `UnsupportedFeatureError` naming the option, rather than being silently
+dropped: the constructor's `zip` (archiver-specific tuning) and `lastPrinted` (untracked by the
+streaming writer's doc-metadata surface, unlike the buffered `Workbook`); `addWorksheet`'s `pageSetup`
+and `headerFooter` (printing config, unimplemented for streaming) and a per-sheet `useSharedStrings`
+override (only a workbook-wide setting exists). `stream.xlsx.WorkbookReader` has no streaming
+counterpart yet and still throws unconditionally.
+
 ## Supported / deferred matrix
 
 | Feature | Status | Notes |
@@ -114,7 +133,8 @@ against real ExcelJS directly: real ExcelJS's own `worksheet.getImages()` return
 | Hyperlink cells (`{ text, hyperlink }`, external URL/mailto) | ✅ | persists as a real OOXML relationship; round-trips to `{text, hyperlink, tooltip?}` with `cell.type` `Hyperlink`. Internal `location=` (in-workbook) links are still ⚠️ deferred. |
 | `worksheet.dataValidations` (`add`/`find`/`remove`/`model`), `cell.dataValidation` | ✅ | list dropdowns (inline or same-sheet range), whole/decimal/date/time/textLength constraints, custom formulas. Note: OOXML's `showDropDown` attribute is inverted — it *hides* the dropdown when present — which the model corrects (`showDropDown: false` means hidden); see DATA-VALIDATION-SPEC §4. A list referencing a range on **another sheet** (the x14/`<extLst>` form) is still ⚠️ deferred. |
 | `worksheet.views` (freeze/split pane), `worksheet.autoFilter` | ✅ | pass-through — the core field names already match ExcelJS's. `autoFilter` also accepts ExcelJS's `{ from, to }` object form (each an address string or `{ row, column }`), normalized to an `"A1:D1"` range string. Multiple views per sheet, `<selection>`, and auto-filter criteria/sort state are still ⚠️ deferred. |
-| `stream.xlsx.WorkbookWriter` / `WorkbookReader` | ❌ deferred | throws `UnsupportedFeatureError` |
+| `stream.xlsx.WorkbookWriter` | ✅ | bridges onto our own streaming writer — see D6 above. `zip`/`lastPrinted` ctor options and `addWorksheet`'s `pageSetup`/`headerFooter`/per-sheet `useSharedStrings` throw `UnsupportedFeatureError` (no streaming equivalent). |
+| `stream.xlsx.WorkbookReader` | ❌ deferred | throws `UnsupportedFeatureError`; no streaming reader yet |
 | `workbook.csv.*` | ❌ deferred | throws `UnsupportedFeatureError` |
 | `workbook.addImage`/`getImage`/`media`, `worksheet.addImage`/`getImages` | ✅ | `{ buffer }` image input; `"B2:D6"` / `{tl,br}` / `{tl,ext}` anchors — see D5 above. `{ base64 }`/`{ filename }` image inputs throw `UnsupportedFeatureError`. Cropping/rotation/effects, hyperlinked images, SVG, and EMF/WMF are deferred. |
 | `worksheet.addBackgroundImage` (header/footer images) | ❌ deferred | throws `UnsupportedFeatureError`; permanent stub, not planned |

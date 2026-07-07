@@ -193,10 +193,12 @@ stays roughly flat as rows grow.
   are missing.) Use the buffered writer if you need column widths today.
 - **No random access after commit.** A committed row is flushed and gone; committed sheets can't
   be reopened. This is inherent to streaming, not a gap.
-- **Not exposed through `@alosha/xlsx/compat` yet.** `ExcelJS.stream.xlsx.WorkbookWriter` in the
-  compat entry still throws `UnsupportedFeatureError`; import the real writer from the main entry
-  instead — `import { WorkbookWriter } from "@alosha/xlsx"` — its API is ExcelJS-shaped already.
-  Wiring the compat namespace to it is a planned follow-up.
+- **`@alosha/xlsx/compat`'s `ExcelJS.stream.xlsx.WorkbookWriter` is a real bridge onto this writer**
+  (docs/MIGRATION.md D6) — the same lifecycle, with rows/cells proxied the same way the buffered
+  compat facade proxies them. A couple of real-ExcelJS constructor/`addWorksheet` options with no
+  equivalent here (`zip`, `lastPrinted`, `pageSetup`, `headerFooter`, a per-sheet `useSharedStrings`
+  override) throw `UnsupportedFeatureError` instead of being silently dropped. `stream.xlsx.
+  WorkbookReader` still throws — no streaming reader exists (previous point).
 - **No CSV streaming** (matching the absence of CSV support generally).
 
 ## API reference (summary)
