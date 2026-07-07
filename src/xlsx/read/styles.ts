@@ -31,6 +31,9 @@ export interface StyleTable {
   styleFor(index: number): Style;
   /** Whether a cellXf's resolved numFmt is a date/time format (drives number-vs-date on read). */
   isDateStyle(index: number): boolean;
+  /** Reconstructed differential Style for a `<cfRule>`'s `dxfId`; out-of-range -> {} (no dxfs at
+   *  all, unlike {@link styleFor}, dxf ids start at 0 with no reserved default). */
+  dxfFor(index: number): Style;
 }
 
 /** Parse xl/styles.xml into a {@link StyleTable}. A missing part yields an all-default table. */
@@ -44,6 +47,7 @@ export function parseStyles(xml: string | undefined): StyleTable {
   const fills = mapChildren(findChild(root, "fills"), "fill", parseFill);
   const borders = mapChildren(findChild(root, "borders"), "border", parseBorder);
   const xfs = mapChildren(findChild(root, "cellXfs"), "xf", parseXf);
+  const dxfs = mapChildren(findChild(root, "dxfs"), "dxf", parseDxf);
 
   const numFmtCode = (id: number): string | undefined =>
     customNumFmts.get(id) ?? BUILTIN_NUMFMT_BY_ID.get(id);
@@ -87,12 +91,18 @@ export function parseStyles(xml: string | undefined): StyleTable {
     return code !== undefined && isDateFormatCode(code);
   };
 
-  return { styleFor, isDateStyle };
+  const dxfFor = (index: number): Style => {
+    if (!Number.isInteger(index) || index < 0 || index >= dxfs.length) return {};
+    return dxfs[index] ?? {};
+  };
+
+  return { styleFor, isDateStyle, dxfFor };
 }
 
 const EMPTY_TABLE: StyleTable = {
   styleFor: () => ({}),
   isDateStyle: () => false,
+  dxfFor: () => ({}),
 };
 
 // --- number-format date detection -------------------------------------------------------------------
@@ -197,6 +207,74 @@ function parseProtection(el: Element): Protection {
   if (el.attrs.locked !== undefined) p.locked = attrTrue(el.attrs.locked);
   if (el.attrs.hidden !== undefined) p.hidden = attrTrue(el.attrs.hidden);
   return p;
+}
+
+// --- dxf pool (conditional-formatting differential styles) ------------------------------------------
+
+/**
+ * Inverse of `renderDxf` (src/xlsx/styles.ts): CT_Dxf child order is `font, numFmt, fill, alignment,
+ * border, protection`; each sub-object is reconstructed only when its element is present. `font` and
+ * `border` reuse the cellXf parsers as-is; `fill` needs a dxf-specific inversion (see
+ * {@link parseDxfFill}) and `numFmt` reads `formatCode` directly — a dxf's `numFmtId` carries no
+ * pool-lookup ambiguity the way a cellXf's does. */
+function parseDxf(el: Element): Style {
+  const style: Style = {};
+
+  const fontEl = findChild(el, "font");
+  if (fontEl !== undefined) {
+    const font = parseFont(fontEl);
+    if (hasKeys(font)) style.font = font;
+  }
+
+  const numFmtEl = findChild(el, "numFmt");
+  if (numFmtEl !== undefined && numFmtEl.attrs.formatCode !== undefined) {
+    style.numFmt = numFmtEl.attrs.formatCode;
+  }
+
+  const fillEl = findChild(el, "fill");
+  if (fillEl !== undefined) style.fill = parseDxfFill(fillEl);
+
+  const alignmentEl = findChild(el, "alignment");
+  if (alignmentEl !== undefined) {
+    const alignment = parseAlignment(alignmentEl);
+    if (hasKeys(alignment)) style.alignment = alignment;
+  }
+
+  const borderEl = findChild(el, "border");
+  if (borderEl !== undefined) {
+    const border = parseBorder(borderEl);
+    if (hasKeys(border)) style.border = border;
+  }
+
+  const protectionEl = findChild(el, "protection");
+  if (protectionEl !== undefined) {
+    const protection = parseProtection(protectionEl);
+    if (hasKeys(protection)) style.protection = protection;
+  }
+
+  return style;
+}
+
+/** Inverse of `renderDxfFill`. **Footgun mirror:** a dxf highlight's colour lives in
+ *  `<patternFill><bgColor>`, not `<fgColor>` as a cellXf solid fill would — so this reads `bgColor`
+ *  only. No `patternType` and no `bgColor` (an empty `<patternFill/>`, emitted for a gradient source
+ *  or a colourless pattern) falls back to `pattern: "none"`; a `patternType` with no colour keeps the
+ *  pattern bare; a colour with no `patternType` (the common highlight case, since the writer omits
+ *  `patternType` for `"solid"`) resolves to `pattern: "solid"`. */
+function parseDxfFill(el: Element): Fill {
+  const patternFill = findChild(el, "patternFill");
+  if (patternFill === undefined) return { type: "pattern", pattern: "none" };
+
+  const patternType = patternFill.attrs.patternType as FillPattern | undefined;
+  const bgEl = findChild(patternFill, "bgColor");
+  const bgColor = bgEl !== undefined ? parseColor(bgEl) : undefined;
+
+  if (patternType === undefined && bgColor === undefined) {
+    return { type: "pattern", pattern: "none" };
+  }
+  const fill: Fill = { type: "pattern", pattern: patternType ?? "solid" };
+  if (bgColor !== undefined) fill.bgColor = bgColor;
+  return fill;
 }
 
 // --- font / fill / border pools ---------------------------------------------------------------------

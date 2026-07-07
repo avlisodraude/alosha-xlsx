@@ -25,7 +25,8 @@ export type AloshaXlsxErrorCode =
   | "INVALID_CELL_VALUE"
   | "UNSUPPORTED_FEATURE"
   | "INVALID_PACKAGE"
-  | "INVALID_PANE";
+  | "INVALID_PANE"
+  | "INVALID_CONDITIONAL_FORMATTING";
 
 /**
  * Base class for all library errors. Abstract — never thrown directly; always a concrete subclass.
@@ -215,5 +216,16 @@ export class InvalidPaneError extends AloshaXlsxError {
     public readonly value: string,
   ) {
     super(`Invalid <pane> ${attribute}: ${JSON.stringify(value)} is not a number.`);
+  }
+}
+
+/** A `<cfRule>` element's `priority`/`rank` attribute is present but not a finite number (CT_CfRule). */
+export class InvalidConditionalFormattingError extends AloshaXlsxError {
+  readonly code = "INVALID_CONDITIONAL_FORMATTING" as const;
+  constructor(
+    public readonly attribute: "priority" | "rank",
+    public readonly value: string,
+  ) {
+    super(`Invalid <cfRule> ${attribute}: ${JSON.stringify(value)} is not a number.`);
   }
 }

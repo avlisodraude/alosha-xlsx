@@ -10,10 +10,28 @@
 // A `<f>` present makes it a formula cell whose cached `<v>` becomes the typed `result`.
 
 import { decodeAddress } from "../../address/index.js";
-import { InvalidCellValueError, InvalidPaneError } from "../../errors.js";
+import {
+  InvalidCellValueError,
+  InvalidConditionalFormattingError,
+  InvalidPaneError,
+} from "../../errors.js";
 import {
   type CellError,
   type CellValue,
+  type CfAverage,
+  type CfCellIs,
+  type CfColorScale,
+  type CfDataBar,
+  type CfDuplicate,
+  type CfExpression,
+  type CfIconSet,
+  type CfOperator,
+  type CfRuleBase,
+  type CfText,
+  type CfTop10,
+  type CfValueObject,
+  type ConditionalFormatting,
+  type ConditionalRule,
   DATA_VALIDATION_OPERATOR_TYPES,
   type DataValidation,
   type DataValidationErrorStyle,
@@ -22,6 +40,7 @@ import {
   type ErrorCode,
   type RichText,
   type Row,
+  type Style,
   type Worksheet,
   type WorksheetView,
 } from "../../model/index.js";
@@ -68,6 +87,7 @@ export function parseWorksheet(ws: Worksheet, xml: string, ctx: WorksheetReadCon
   const merges: string[] = [];
   const hyperlinks: HyperlinkRef[] = [];
   const dataValidations: DataValidationRef[] = [];
+  const conditionalFormattings: ConditionalFormatting[] = [];
 
   c.eachChild(ev.name, (child) => {
     switch (localName(child.name)) {
@@ -87,6 +107,9 @@ export function parseWorksheet(ws: Worksheet, xml: string, ctx: WorksheetReadCon
       case "mergeCells":
         if (!child.selfClosing) collectMerges(c, child.name, merges);
         break;
+      case "conditionalFormatting":
+        collectConditionalFormatting(c, child, ctx, conditionalFormattings);
+        break;
       case "dataValidations":
         if (!child.selfClosing) collectDataValidations(c, child.name, dataValidations);
         break;
@@ -99,6 +122,14 @@ export function parseWorksheet(ws: Worksheet, xml: string, ctx: WorksheetReadCon
   });
 
   for (const ref of merges) ws.mergeCells(ref);
+  for (const cf of conditionalFormattings) {
+    try {
+      ws.addConditionalFormatting(cf);
+    } catch {
+      // A malformed sqref fails the model's Range validation (InvalidRangeError) — skip this block
+      // rather than let one corrupt conditionalFormatting derail the rest of the read.
+    }
+  }
   for (const { sqref, dv } of dataValidations) ws.dataValidations.add(sqref, dv);
   if (ctx.rels) {
     for (const link of hyperlinks) applyHyperlink(ws, link, ctx.rels);
@@ -375,6 +406,286 @@ function collectMerges(c: XmlCursor, container: string, merges: string[]): void 
       c.textUntilClose(mergeCell.name);
     }
   });
+}
+
+// --- conditional formatting ---------------------------------------------------------------------------
+// Inverse of renderConditionalFormatting/renderCfRule (src/xlsx/parts/worksheet.ts §2b). CT_Worksheet
+// allows several sibling `<conditionalFormatting sqref="…">` blocks — unlike `<dataValidations>` there
+// is no outer wrapper, so each block is handled as it is walked rather than collected via `eachChild`
+// over a container.
+
+const KNOWN_CF_TYPES = new Set<string>([
+  "cellIs",
+  "expression",
+  "containsText",
+  "notContainsText",
+  "beginsWith",
+  "endsWith",
+  "top10",
+  "aboveAverage",
+  "duplicateValues",
+  "uniqueValues",
+  "colorScale",
+  "dataBar",
+  "iconSet",
+]);
+
+/** Collect a single `<conditionalFormatting sqref="…">` block, applied via `ws.addConditionalFormatting`
+ *  after the full child walk (like merges/data validations). A block with no `sqref` is malformed and
+ *  skipped; each `<cfRule>` child is inverted by {@link parseCfRule}, which itself skips (never throws
+ *  for) an unrecognized `type`. */
+function collectConditionalFormatting(
+  c: XmlCursor,
+  block: OpenEvent,
+  ctx: WorksheetReadContext,
+  out: ConditionalFormatting[],
+): void {
+  const ref = block.attrs.sqref;
+  if (ref === undefined) {
+    if (!block.selfClosing) c.textUntilClose(block.name);
+    return;
+  }
+
+  const rules: ConditionalRule[] = [];
+  if (!block.selfClosing) {
+    c.eachChild(block.name, (ruleEl) => {
+      if (localName(ruleEl.name) !== "cfRule") {
+        if (!ruleEl.selfClosing) c.textUntilClose(ruleEl.name);
+        return;
+      }
+      const rule = parseCfRule(c, ruleEl, ctx);
+      if (rule !== undefined) rules.push(rule);
+    });
+  }
+
+  out.push({ ref, rules });
+}
+
+/**
+ * Invert one `<cfRule>` (CT_CfRule) into the model union, mirroring every shape `renderCfRule` emits.
+ * An unrecognized `type`, or a rule missing a field its type requires (`cellIs`/`expression` with no
+ * `<formula>`, the `containsText` family with no `text`, `top10` with no `rank`, `colorScale`/`dataBar`/
+ * `iconSet` with no stops), is skipped rather than thrown — only a *malformed* `priority`/`rank`
+ * (present but non-numeric) throws {@link InvalidConditionalFormattingError}, mirroring the pane
+ * reader's numeric-attribute contract (`paneNum`).
+ */
+function parseCfRule(
+  c: XmlCursor,
+  el: OpenEvent,
+  ctx: WorksheetReadContext,
+): ConditionalRule | undefined {
+  const type = el.attrs.type;
+  if (type === undefined || !KNOWN_CF_TYPES.has(type)) {
+    if (!el.selfClosing) c.textUntilClose(el.name);
+    return undefined;
+  }
+
+  const priority = cfNum(el.attrs.priority, "priority");
+  const stopIfTrue = truthy(el.attrs.stopIfTrue);
+
+  switch (type) {
+    case "cellIs": {
+      const operator = el.attrs.operator as CfOperator | undefined;
+      const formulae = collectCfFormulae(c, el).map(numericLiteralOr);
+      if (operator === undefined || formulae.length === 0) return undefined;
+      const rule: CfCellIs = { type: "cellIs", operator, formulae };
+      applyBase(rule, priority, stopIfTrue);
+      applyDxfStyle(rule, ctx, el.attrs.dxfId);
+      return rule;
+    }
+    case "expression": {
+      const [first] = collectCfFormulae(c, el);
+      if (first === undefined) return undefined;
+      const rule: CfExpression = { type: "expression", formulae: [first] };
+      applyBase(rule, priority, stopIfTrue);
+      applyDxfStyle(rule, ctx, el.attrs.dxfId);
+      return rule;
+    }
+    case "containsText":
+    case "notContainsText":
+    case "beginsWith":
+    case "endsWith": {
+      const text = el.attrs.text;
+      collectCfFormulae(c, el); // consume + discard the derived SEARCH/LEFT/RIGHT formula
+      if (text === undefined) return undefined;
+      const textType = type as "containsText" | "notContainsText" | "beginsWith" | "endsWith";
+      const rule: CfText = { type: textType, text };
+      applyBase(rule, priority, stopIfTrue);
+      applyDxfStyle(rule, ctx, el.attrs.dxfId);
+      return rule;
+    }
+    case "top10": {
+      const rank = cfNum(el.attrs.rank, "rank");
+      if (!el.selfClosing) c.textUntilClose(el.name);
+      if (rank === undefined) return undefined;
+      const rule: CfTop10 = { type: "top10", rank };
+      if (truthy(el.attrs.percent)) rule.percent = true;
+      if (truthy(el.attrs.bottom)) rule.bottom = true;
+      applyBase(rule, priority, stopIfTrue);
+      applyDxfStyle(rule, ctx, el.attrs.dxfId);
+      return rule;
+    }
+    case "aboveAverage": {
+      if (!el.selfClosing) c.textUntilClose(el.name);
+      // `aboveAverage="0"` is the writer's encoding for `belowAverage` (same OOXML type).
+      const isBelow = el.attrs.aboveAverage !== undefined && !truthy(el.attrs.aboveAverage);
+      const rule: CfAverage = { type: isBelow ? "belowAverage" : "aboveAverage" };
+      applyBase(rule, priority, stopIfTrue);
+      applyDxfStyle(rule, ctx, el.attrs.dxfId);
+      return rule;
+    }
+    case "duplicateValues":
+    case "uniqueValues": {
+      if (!el.selfClosing) c.textUntilClose(el.name);
+      const dupType = type as "duplicateValues" | "uniqueValues";
+      const rule: CfDuplicate = { type: dupType };
+      applyBase(rule, priority, stopIfTrue);
+      applyDxfStyle(rule, ctx, el.attrs.dxfId);
+      return rule;
+    }
+    case "colorScale": {
+      const wrapper = parseCfVisualWrapper(c, el, "colorScale");
+      if (wrapper === undefined || wrapper.cfvo.length === 0 || wrapper.colors.length === 0) {
+        return undefined;
+      }
+      const rule: CfColorScale = {
+        type: "colorScale",
+        cfvo: wrapper.cfvo,
+        color: wrapper.colors,
+      };
+      applyBase(rule, priority, stopIfTrue);
+      return rule;
+    }
+    case "dataBar": {
+      const wrapper = parseCfVisualWrapper(c, el, "dataBar");
+      const first = wrapper?.cfvo[0];
+      const second = wrapper?.cfvo[1];
+      const color = wrapper?.colors[0];
+      if (first === undefined || second === undefined || color === undefined) return undefined;
+      const rule: CfDataBar = { type: "dataBar", cfvo: [first, second], color };
+      applyBase(rule, priority, stopIfTrue);
+      return rule;
+    }
+    case "iconSet": {
+      const wrapper = parseCfVisualWrapper(c, el, "iconSet");
+      const iconSetName = wrapper?.attrs.iconSet;
+      if (wrapper === undefined || iconSetName === undefined || wrapper.cfvo.length === 0) {
+        return undefined;
+      }
+      const rule: CfIconSet = { type: "iconSet", iconSet: iconSetName, cfvo: wrapper.cfvo };
+      applyBase(rule, priority, stopIfTrue);
+      return rule;
+    }
+    default:
+      if (!el.selfClosing) c.textUntilClose(el.name);
+      return undefined;
+  }
+}
+
+/** Collect every direct `<formula>` child's raw text (`cellIs`: 1–2, `expression`: 1, the
+ *  `containsText` family: 1 — discarded there, since `text` carries the field and the formula is
+ *  derived on write). */
+function collectCfFormulae(c: XmlCursor, el: OpenEvent): string[] {
+  const formulae: string[] = [];
+  if (!el.selfClosing) {
+    c.eachChild(el.name, (child) => {
+      if (localName(child.name) === "formula") {
+        formulae.push(child.selfClosing ? "" : c.textUntilClose(child.name));
+      } else if (!child.selfClosing) {
+        c.textUntilClose(child.name);
+      }
+    });
+  }
+  return formulae;
+}
+
+/** A `<formula>`/`<cfvo val>` body: a plain numeric literal (matching the writer's `String(number)`)
+ *  decodes to a number; anything else (a formula, cell ref, or quoted text) is kept as-is. */
+function numericLiteralOr(text: string): string | number {
+  return /^-?\d+(\.\d+)?$/.test(text) ? Number(text) : text;
+}
+
+/** Parse a `<cfRule>` numeric attribute (`priority`/`rank`); `undefined` when absent, thrown when
+ *  present but not finite — mirrors `paneNum`'s no-silent-NaN contract for `<pane>`. */
+function cfNum(val: string | undefined, attr: "priority" | "rank"): number | undefined {
+  if (val === undefined) return undefined;
+  const n = Number(val);
+  if (!Number.isFinite(n)) throw new InvalidConditionalFormattingError(attr, val);
+  return n;
+}
+
+function applyBase(rule: CfRuleBase, priority: number | undefined, stopIfTrue: boolean): void {
+  if (priority !== undefined) rule.priority = priority;
+  if (stopIfTrue) rule.stopIfTrue = true;
+}
+
+/** Resolve `dxfId` through the styles pool into `rule.style`, mirroring `ctx.styles.addDxf` on write.
+ *  An absent/non-numeric `dxfId`, or one resolving to an empty differential style, leaves `style`
+ *  unset — matching a rule that was originally written with no `style`. */
+function applyDxfStyle(
+  rule: { style?: Partial<Style> },
+  ctx: WorksheetReadContext,
+  dxfIdAttr: string | undefined,
+): void {
+  const dxfId = num(dxfIdAttr);
+  if (dxfId === undefined) return;
+  const style = ctx.styles.dxfFor(dxfId);
+  if (Object.keys(style).length > 0) rule.style = style;
+}
+
+interface CfVisualWrapper {
+  attrs: Record<string, string>;
+  cfvo: CfValueObject[];
+  colors: string[];
+}
+
+/** Find the `<colorScale>`/`<dataBar>`/`<iconSet>` wrapper under a self-visualising `<cfRule>` and
+ *  collect its `<cfvo>` stops (in order) and `<color rgb>` values (in order); `iconSet`'s own preset
+ *  name lives on `attrs.iconSet`. `undefined` when the wrapper is missing entirely (e.g. a
+ *  self-closing `<cfRule>`). */
+function parseCfVisualWrapper(
+  c: XmlCursor,
+  cfRuleEl: OpenEvent,
+  wrapperLocalName: string,
+): CfVisualWrapper | undefined {
+  let result: CfVisualWrapper | undefined;
+  if (!cfRuleEl.selfClosing) {
+    c.eachChild(cfRuleEl.name, (child) => {
+      if (localName(child.name) !== wrapperLocalName) {
+        if (!child.selfClosing) c.textUntilClose(child.name);
+        return;
+      }
+      const cfvo: CfValueObject[] = [];
+      const colors: string[] = [];
+      if (!child.selfClosing) {
+        c.eachChild(child.name, (grand) => {
+          switch (localName(grand.name)) {
+            case "cfvo": {
+              const cfvoType = grand.attrs.type as CfValueObject["type"] | undefined;
+              if (cfvoType !== undefined) {
+                const val = grand.attrs.val;
+                cfvo.push(
+                  val !== undefined
+                    ? { type: cfvoType, value: numericLiteralOr(val) }
+                    : { type: cfvoType },
+                );
+              }
+              if (!grand.selfClosing) c.textUntilClose(grand.name);
+              break;
+            }
+            case "color":
+              if (grand.attrs.rgb !== undefined) colors.push(grand.attrs.rgb);
+              if (!grand.selfClosing) c.textUntilClose(grand.name);
+              break;
+            default:
+              if (!grand.selfClosing) c.textUntilClose(grand.name);
+          }
+        });
+      }
+      result = { attrs: child.attrs, cfvo, colors };
+    });
+  }
+  return result;
 }
 
 const KNOWN_DATA_VALIDATION_TYPES = new Set<DataValidationType>([
