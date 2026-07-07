@@ -15,7 +15,9 @@ import { XmlWriter } from "../../xml/index.js";
 import { dateToSerial } from "../date.js";
 import type { SharedStrings } from "../shared-strings.js";
 import type { Styles } from "../styles.js";
+import type { WorksheetRel } from "./constants.js";
 import { NS } from "./constants.js";
+import { renderWorksheetRels } from "./worksheet-rels.js";
 
 export interface WorksheetContext {
   styles: Styles;
@@ -24,11 +26,25 @@ export interface WorksheetContext {
   date1904: boolean;
 }
 
+/** The rendered worksheet plus its `.rels` doc, if the sheet has any relationships (hyperlinks). */
+export interface RenderedWorksheet {
+  xml: string;
+  /** Rendered `xl/worksheets/_rels/sheetN.xml.rels`; `undefined` when the sheet has no hyperlinks. */
+  rels?: string;
+}
+
+/** A cell hyperlink collected during the sheetData pass, emitted as a `<hyperlink>` after merges. */
+interface HyperlinkRecord {
+  ref: string;
+  target: string;
+  tooltip?: string;
+}
+
 /** Applied to a Date cell whose style carries no explicit number format, so Excel shows a date rather
  *  than the raw serial. Built-in id 14, so it adds no custom `<numFmt>` entry. */
 const DEFAULT_DATE_NUMFMT = "mm-dd-yy";
 
-export function renderWorksheet(ws: Worksheet, ctx: WorksheetContext): string {
+export function renderWorksheet(ws: Worksheet, ctx: WorksheetContext): RenderedWorksheet {
   const model = ws.model;
   const w = new XmlWriter();
   w.open("worksheet", { xmlns: NS.spreadsheetml, "xmlns:r": NS.relationships });
@@ -47,12 +63,15 @@ export function renderWorksheet(ws: Worksheet, ctx: WorksheetContext): string {
     defaultColWidth: model.properties.defaultColWidth,
   });
 
+  const hyperlinks: HyperlinkRecord[] = [];
   renderCols(w, model.columns, ctx);
-  renderSheetData(w, model.rows, ctx);
+  renderSheetData(w, model.rows, ctx, hyperlinks);
   renderMergeCells(w, model.merges);
+  // CT_Worksheet order: `<hyperlinks>` sits after `<mergeCells>`.
+  const rels = renderHyperlinks(w, hyperlinks);
 
   w.close("worksheet");
-  return w.toString();
+  return { xml: w.toString(), rels };
 }
 
 function renderCols(
@@ -91,6 +110,7 @@ function renderSheetData(
   w: XmlWriter,
   rows: Worksheet["model"]["rows"],
   ctx: WorksheetContext,
+  hyperlinks: HyperlinkRecord[],
 ): void {
   w.open("sheetData");
   for (const row of rows) {
@@ -98,7 +118,7 @@ function renderSheetData(
 
     let cellsXml = "";
     for (const cell of row.cells) {
-      cellsXml += renderCell(cell, ctx);
+      cellsXml += renderCell(cell, ctx, hyperlinks);
     }
 
     const hasAttrs =
@@ -122,7 +142,7 @@ function renderSheetData(
 
 /** Render one `<c>` element, or `""` when the cell contributes nothing (a null/merge cell with the
  *  default style). Value interning into the shared-strings/styles pools happens here. */
-function renderCell(cell: CellModel, ctx: WorksheetContext): string {
+function renderCell(cell: CellModel, ctx: WorksheetContext, hyperlinks: HyperlinkRecord[]): string {
   const styleId = cell.style ? ctx.styles.addStyle(cell.style) : 0;
   const r = cell.address;
 
@@ -150,8 +170,12 @@ function renderCell(cell: CellModel, ctx: WorksheetContext): string {
     case CellType.String:
       return stringCell(r, styleId, cell.value as string, ctx);
 
-    case CellType.Hyperlink:
-      return stringCell(r, styleId, (cell.value as { text: string }).text, ctx);
+    case CellType.Hyperlink: {
+      const link = cell.value as { text: string; hyperlink: string; tooltip?: string };
+      hyperlinks.push({ ref: r, target: link.hyperlink, tooltip: link.tooltip });
+      // Still emit the display text as a normal string cell — the link is a sheet-level record.
+      return stringCell(r, styleId, link.text, ctx);
+    }
 
     case CellType.RichText:
       return richTextCell(r, styleId, cell.value as RichText, ctx);
@@ -238,4 +262,22 @@ function renderMergeCells(w: XmlWriter, merges: string[]): void {
   w.open("mergeCells", { count: merges.length });
   for (const ref of merges) w.leaf("mergeCell", { ref });
   w.close("mergeCells");
+}
+
+/** Emit the `<hyperlinks>` block, assigning each link a worksheet-local `rId${n}`. Returns the
+ *  matching `.rels` doc (or `undefined` when the sheet has no hyperlinks), so the same rId space
+ *  backs both the `<hyperlink r:id>` and the relationship `Id`. */
+function renderHyperlinks(w: XmlWriter, hyperlinks: HyperlinkRecord[]): string | undefined {
+  if (hyperlinks.length === 0) return undefined;
+
+  const rels: WorksheetRel[] = [];
+  w.open("hyperlinks");
+  hyperlinks.forEach((h, i) => {
+    const rId = `rId${i + 1}`;
+    w.leaf("hyperlink", { ref: h.ref, "r:id": rId, tooltip: h.tooltip });
+    rels.push({ rId, target: h.target, mode: "External" });
+  });
+  w.close("hyperlinks");
+
+  return renderWorksheetRels(rels);
 }

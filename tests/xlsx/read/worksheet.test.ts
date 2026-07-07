@@ -380,7 +380,7 @@ describe("parseWorksheet — round-trip through the writer", () => {
   function readBack(useSharedStrings: boolean): Worksheet {
     const styles = createStyles();
     const sharedStrings = createSharedStrings();
-    const xml = renderWorksheet(fixture(), {
+    const { xml } = renderWorksheet(fixture(), {
       styles,
       sharedStrings,
       useSharedStrings,
