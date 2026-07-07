@@ -118,7 +118,7 @@ functions accept a `ReadOptions` (reserved for future use).
 | Multiple worksheets, sheet state (visible / hidden / veryHidden) | ✅ | ✅ | |
 | Workbook & sheet views (freeze/split, zoom, active tab) | ✅ | ✅ | round-trip as data |
 | Workbook metadata (creator, dates, title, …) | ✅ | ✅ | |
-| Hyperlink cells | ⚠️ | ⚠️ | round-trip as display **text** — see limitations |
+| Hyperlink cells (external URL/mailto) | ✅ | ✅ | real OOXML relationship, round-trips as `{ text, hyperlink, tooltip? }`; internal `location=` links deferred |
 | Streaming read/write | ❌ | ❌ | deferred |
 | Drawings / images / charts | ❌ | ❌ | deferred |
 | Data validation, conditional formatting, comments | ❌ | ❌ | deferred |
@@ -138,7 +138,6 @@ behave as you'd expect. Common differences to watch for:
 - **Clearer row inheritance.** Instead of ExcelJS's `'i' | 'o' | 'i+' | 'o+'` DSL, `addRow` /
   `insertRow` take `{ inheritFrom: "above" | "below", includeEmpty?: boolean }`.
 - **ESM-first.** The package is ESM with a CJS fallback; prefer `import` over `require`.
-- **Hyperlinks round-trip as text** (see below).
 
 Not everything ExcelJS does is implemented yet — check the feature matrix and limitations before
 porting a workbook that leans on drawings, streaming, or data validation.
@@ -151,9 +150,10 @@ behavioural notes to check before porting.
 
 ## Known limitations
 
-- **Hyperlink cells round-trip as their display text.** Setting a `{ text, hyperlink }` value
-  writes the visible text; the clickable link relationship is not yet persisted, and reading a
-  workbook with hyperlinks yields the text only. Real hyperlink relationships are planned.
+- **Internal (in-workbook) hyperlinks are deferred.** External `http(s)`/`mailto` cell hyperlinks
+  round-trip as real OOXML relationships (`{ text, hyperlink, tooltip? }`). Links to a location
+  within the same workbook (ExcelJS's `location="Sheet2!A1"` form, no external relationship) aren't
+  written or read yet.
 - **No streaming.** Reading and writing are buffer-based (the whole workbook lives in memory). A
   streaming API for very large sheets is deferred.
 - **No drawings, images, or charts.** These parts are ignored on read and not emitted on write.

@@ -4,7 +4,9 @@
 // variable import specifier keeps the suite typechecking and running when it is absent (it just skips).
 
 import { describe, expect, it } from "vitest";
+import { Workbook } from "../../src/model/index.js";
 import { readWorkbookBuffer } from "../../src/xlsx/read-workbook.js";
+import { writeWorkbookBuffer } from "../../src/xlsx/write-workbook.js";
 
 // biome-ignore lint/suspicious/noExplicitAny: exceljs ships no static types we depend on here.
 type AnyExcelJS = { Workbook: new () => any };
@@ -53,5 +55,61 @@ describe("read foreign — exceljs-produced buffer", () => {
     expect(ws.getCell("C1").result).toBe(25);
     expect(ws.getCell("A3").value).toBe("top");
     expect(ws.getCell("B3").isMerged).toBe(true);
+  });
+});
+
+describe("read foreign — hyperlinks", () => {
+  it("recovers a hyperlink cell written by exceljs", async (ctx) => {
+    const ExcelJS = await loadExcelJS();
+    if (!ExcelJS) {
+      ctx.skip();
+      return;
+    }
+
+    const src = new ExcelJS.Workbook();
+    const sheet = src.addWorksheet("Links");
+    sheet.getCell("A1").value = { text: "Anthropic", hyperlink: "https://anthropic.com" };
+    sheet.getCell("A2").value = {
+      text: "Mail us",
+      hyperlink: "mailto:hi@example.com",
+      tooltip: "Send an email",
+    };
+
+    const buffer = await src.xlsx.writeBuffer();
+    const bytes = new Uint8Array(buffer as ArrayBuffer);
+
+    const wb = readWorkbookBuffer(bytes);
+    const ws = wb.getWorksheet("Links");
+    expect(ws).toBeDefined();
+    if (!ws) return;
+
+    expect(ws.getCell("A1").value).toEqual({
+      text: "Anthropic",
+      hyperlink: "https://anthropic.com",
+    });
+    expect(ws.getCell("A2").value).toEqual({
+      text: "Mail us",
+      hyperlink: "mailto:hi@example.com",
+      tooltip: "Send an email",
+    });
+  });
+
+  it("writes a hyperlink that re-opens in exceljs with the link intact", async (ctx) => {
+    const ExcelJS = await loadExcelJS();
+    if (!ExcelJS) {
+      ctx.skip();
+      return;
+    }
+
+    const wb = new Workbook();
+    const ws = wb.addWorksheet("Links");
+    ws.getCell("A1").value = { text: "Anthropic", hyperlink: "https://anthropic.com" };
+
+    const bytes = writeWorkbookBuffer(wb);
+    const loaded = new ExcelJS.Workbook();
+    await loaded.xlsx.load(Buffer.from(bytes));
+
+    const cell = loaded.getWorksheet("Links").getCell("A1");
+    expect(cell.value).toEqual({ text: "Anthropic", hyperlink: "https://anthropic.com" });
   });
 });

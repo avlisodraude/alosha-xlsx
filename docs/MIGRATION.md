@@ -58,7 +58,7 @@ never the core's field merge. Again, this is scoped to compat-constructed workbo
 | Style setters (`font`/`fill`/`border`/`alignment`/`protection`/`numFmt`) | ✅ | ExcelJS whole-object precedence — see D2 above |
 | `Enums.ValueType`, `Enums.FormulaType` | ✅ | |
 | `workbook.xlsx.writeBuffer`/`writeFile`/`load`/`readFile`/`read` | ✅ | |
-| Hyperlink cells (`{ text, hyperlink }`) | ⚠️ planned | round-trips as plain display **text** — the clickable relationship isn't persisted yet (a pre-existing `@alosha/xlsx` limitation, not compat-specific). Reading a compat-written hyperlink back gives you a string, not `{text, hyperlink}`, and `cell.type` comes back `String`, not `Hyperlink`. |
+| Hyperlink cells (`{ text, hyperlink }`, external URL/mailto) | ✅ | persists as a real OOXML relationship; round-trips to `{text, hyperlink, tooltip?}` with `cell.type` `Hyperlink`. Internal `location=` (in-workbook) links are still ⚠️ deferred. |
 | `stream.xlsx.WorkbookWriter` / `WorkbookReader` | ❌ deferred | throws `UnsupportedFeatureError` |
 | `workbook.csv.*` | ❌ deferred | throws `UnsupportedFeatureError` |
 | `addImage`/`getImage`/`workbook.media`/`worksheet.addImage` | ❌ deferred | throws `UnsupportedFeatureError` |
