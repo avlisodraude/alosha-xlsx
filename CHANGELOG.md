@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.7.0
+
+### Minor Changes
+
+- Conditional formatting (write + read + compat), backed by a new differential-style (`<dxfs>`) pool.
+
+  Worksheets can now carry `<conditionalFormatting>` blocks — `addConditionalFormatting({ ref, rules })`,
+  `removeConditionalFormatting(ref)`, and a `conditionalFormattings` getter — covering `cellIs`,
+  `expression`, the text-contains family (`containsText`/`notContainsText`/`beginsWith`/`endsWith`),
+  `top10`, `aboveAverage`/`belowAverage`, `duplicateValues`/`uniqueValues`, and the self-visualising
+  `colorScale`/`dataBar`/`iconSet` rules.
+
+  - **Model.** `ConditionalRule` is a discriminated union keyed by `type`, mirroring ExcelJS's
+    `addConditionalFormatting` shape so the compat layer stays a pass-through; `ref` is validated
+    through the existing `Range` decoder.
+  - **Write.** A real `<dxfs>` pool in `xl/styles.xml` (dxf ids start at 0, unlike the seeded
+    font/fill/border pools) backs every dxf-bearing rule's differential `style`; `<conditionalFormatting>`
+    is emitted between `<mergeCells>` and `<dataValidations>`, matching CT_Worksheet element order.
+    Rules with no explicit `priority` draw a workbook-monotonic one.
+  - **Read.** Inverts every write shape, including the dxf pool (**footgun**: a dxf highlight's colour
+    lives in `<patternFill><bgColor>`, not `<fgColor>` like a cellXf solid fill). A malformed
+    `priority`/`rank` raises a typed `AloshaXlsxError` instead of `NaN`; an unrecognized `cfRule` type,
+    or a block missing `sqref`, is skipped rather than thrown.
+  - **Compat.** `worksheet.addConditionalFormatting`/`removeConditionalFormatting`/
+    `conditionalFormattings` are un-deferred. `colorScale`/`dataBar` colours are bridged bidirectionally
+    between ExcelJS's `{ argb }` objects and the core model's bare-ARGB-string `CfColor`. Two shapes are
+    _not_ bridged, by design — see MIGRATION.md's D3 note: the text-contains family's ExcelJS
+    `type:"containsText"` + `operator` split (construct these with the core's literal `type` per variant
+    instead), and `removeConditionalFormatting`'s ExcelJS index/predicate/clear-all argument (the core
+    removes by exact `ref` string).
+
+  **Deferred:** the x14/`<extLst>` dataBar extensions (gradient fill, axis, negative-value fill) — only
+  the ECMA-376 baseline `<dataBar>` is emitted — `timePeriod` rules, and custom `iconSet` icons.
+
 ## 0.6.0
 
 ### Minor Changes
