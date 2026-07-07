@@ -70,6 +70,16 @@ function styleFor(row: number, col: number, kind: SpecValue): SpecStyle | undefi
   return Object.keys(style).length > 0 ? style : undefined;
 }
 
+/** One generated row of `cols` mixed-type cells for the streaming bench (bench/streaming.ts). Produced
+ *  on demand — deliberately NOT as a materialised `WorkbookSpec` — so the streaming path can write a
+ *  500k-row sheet without ever holding the whole model, letting the bench measure its bounded memory.
+ *  The buffered path walks the same generator so both write byte-for-byte identical content. */
+export function streamRowValues(row: number, cols: number): SpecValue[] {
+  const values: SpecValue[] = [];
+  for (let col = 1; col <= cols; col++) values.push(valueFor(row, col));
+  return values;
+}
+
 export function buildWorkbookSpec(rows: number, cols: number): WorkbookSpec {
   const cells: CellSpec[] = [];
   for (let row = 1; row <= rows; row++) {
