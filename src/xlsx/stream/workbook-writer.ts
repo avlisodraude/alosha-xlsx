@@ -13,10 +13,17 @@
 // pool is small and stays resident. This is a standalone constructor, deliberately off the `Workbook`
 // prototype (which keeps its buffered `workbook.xlsx` accessor).
 
-import { colLetterToNumber } from "../../address/index.js";
 import { DuplicateWorksheetNameError } from "../../errors.js";
-import type { RowValues, WorksheetHost } from "../../model/index.js";
-import { Column, DataValidations, Row, Workbook } from "../../model/index.js";
+import type {
+  AddImageOptions,
+  ConditionalFormatting,
+  DataValidations,
+  ImageAnchor,
+  RowValues,
+  WorksheetImage,
+  WorksheetView,
+} from "../../model/index.js";
+import { Row, Workbook, Worksheet } from "../../model/index.js";
 import { XmlWriter } from "../../xml/index.js";
 import { renderAppProps } from "../parts/app-props.js";
 import type { SheetRel, WorkbookRel } from "../parts/constants.js";
@@ -27,16 +34,22 @@ import { renderRootRels } from "../parts/root-rels.js";
 import { renderTheme } from "../parts/theme.js";
 import { renderWorkbook } from "../parts/workbook.js";
 import { renderWorkbookRels } from "../parts/workbook-rels.js";
-import { renderWorksheetRels } from "../parts/worksheet-rels.js";
 import {
   createSheetRelAllocator,
   type ExtraPart,
   type HyperlinkRecord,
+  renderAutoFilter,
+  renderConditionalFormatting,
+  renderDataValidations,
   renderHyperlinks,
+  renderImages,
+  renderMergeCells,
   renderRowXml,
+  renderSheetComments,
   renderSheetViews,
   type WorksheetContext,
 } from "../parts/worksheet.js";
+import { renderWorksheetRels } from "../parts/worksheet-rels.js";
 import { createSharedStrings } from "../shared-strings.js";
 import { createStyles, type Styles } from "../styles.js";
 import { drainToFile, drainToWritable, type NodeWritableLike, QueueSink } from "./output.js";
@@ -62,41 +75,19 @@ export interface WorkbookWriterOptions {
   useStyles?: boolean;
 }
 
-/** The narrow {@link WorksheetHost} a transient {@link Row} needs to build its cells — no row storage,
- *  no merges, just column projections so `Row.getCell` can resolve a cell's style. */
-class RowBuilderHost implements WorksheetHost {
-  readonly properties = { outlineLevelCol: 0, outlineLevelRow: 0 } as WorksheetHost["properties"];
-  readonly dataValidations = new DataValidations();
-  private readonly columns = new Map<number, Column>();
-
-  getColumn(col: number | string): Column {
-    const n = typeof col === "number" ? col : colLetterToNumber(col);
-    let c = this.columns.get(n);
-    if (!c) {
-      c = new Column(this, n);
-      this.columns.set(n, c);
-    }
-    return c;
-  }
-
-  getColumnKey(): Column | undefined {
-    return undefined;
-  }
-
-  getRow(): Row {
-    throw new Error("RowBuilderHost: getRow is not supported in the streaming writer");
-  }
-
-  eachRow(): void {
-    /* no rows are retained */
-  }
-}
-
 /** Streams a single worksheet part. Emits the prologue (`<worksheet>…<sheetData>`) on the first
  *  committed row (or on {@link commit} if the sheet is empty), a `<row>` per committed row, and the
- *  epilogue (`</sheetData>`, any `<hyperlinks>`, `</worksheet>`) plus the sheet `.rels` on commit. */
+ *  epilogue (trailing elements + child parts, in CT_Worksheet order) plus the sheet `.rels` on commit.
+ *
+ *  A real model {@link Worksheet} backs it (`sheet`), serving three roles at once: the {@link WorksheetHost}
+ *  a transient {@link Row} resolves cell styles / comments / validations through, the store for the
+ *  sheet-level feature config the epilogue serialises (merges, panes, auto-filter, conditional formatting,
+ *  images), and — since comments are ref-keyed on it — the collector for notes set across committed rows.
+ *  Rows are never added to it (they are built with `new Row(sheet, n)` and streamed straight out), so it
+ *  never retains the row body: memory stays bounded regardless of row count. */
 export class WorksheetWriter {
-  private readonly host = new RowBuilderHost();
+  /** The model worksheet: row host + sheet-level feature store. Rows are streamed, never stored here. */
+  private readonly sheet: Worksheet;
   private readonly hyperlinks: HyperlinkRecord[] = [];
   private rowCount = 0;
   private started = false;
@@ -105,7 +96,10 @@ export class WorksheetWriter {
   constructor(
     private readonly workbook: WorkbookWriter,
     readonly rel: SheetRel,
-  ) {}
+    sheet: Worksheet,
+  ) {
+    this.sheet = sheet;
+  }
 
   get name(): string {
     return this.rel.name;
@@ -115,11 +109,60 @@ export class WorksheetWriter {
     return this.committed;
   }
 
-  /** Build the next row from `data`; its XML is deflated to the sink when you call `.commit()`. */
+  // --- sheet-level feature config (delegates to the backing model worksheet) ---------------------
+  // Set these before `commit()`; they surface in the epilogue. Panes/auto-filter are also read by the
+  // prologue, so configure them before the first row commits (like ExcelJS's WorksheetWriter).
+
+  /** Frozen/split panes + gridline visibility; read by the prologue, so set before the first row. */
+  get views(): WorksheetView[] {
+    return this.sheet.views;
+  }
+  set views(v: WorksheetView[]) {
+    this.sheet.views = v;
+  }
+
+  /** `<autoFilter ref>` (e.g. `"A1:D1"`), emitted in the epilogue. */
+  get autoFilter(): string | undefined {
+    return this.sheet.autoFilter;
+  }
+  set autoFilter(ref: string | undefined) {
+    this.sheet.autoFilter = ref;
+  }
+
+  /** Mutable sheet properties (default row height, gridlines, …); read by the prologue. */
+  get properties(): Worksheet["properties"] {
+    return this.sheet.properties;
+  }
+
+  /** Merge a range (same argument forms as the buffered `Worksheet.mergeCells`). */
+  mergeCells(...cells: unknown[]): void {
+    this.sheet.mergeCells(...(cells as Parameters<Worksheet["mergeCells"]>));
+  }
+
+  /** Add a `<conditionalFormatting>` block, flushed in the epilogue. */
+  addConditionalFormatting(cf: ConditionalFormatting): ConditionalFormatting {
+    return this.sheet.addConditionalFormatting(cf);
+  }
+
+  /** Ref-keyed data-validation store (also reached via `cell.dataValidation`), flushed in the epilogue. */
+  get dataValidations(): DataValidations {
+    return this.sheet.dataValidations;
+  }
+
+  /** Place a workbook-registered image (`imageId` from {@link WorkbookWriter.addImage}); its drawing
+   *  part + media bytes are flushed at `commit()`. */
+  addImage(imageId: number, anchor: ImageAnchor): WorksheetImage {
+    return this.sheet.addImage(imageId, anchor);
+  }
+
+  /** Build the next row from `data`; its XML is deflated to the sink when you call `.commit()`. Set
+   *  cell styles, and `cell.note` comments, on the returned row before committing it. */
   addRow(data: RowValues): StreamedRow {
     if (this.committed) throw new Error(`worksheet "${this.name}" is already committed`);
     const number = ++this.rowCount;
-    const row = new Row(this.host, number) as StreamedRow;
+    // Host the transient row on the model worksheet so styles/comments/validations resolve, but never
+    // register it (no `getRow`/`addRow` on the model) — the row body is not retained.
+    const row = new Row(this.sheet, number) as StreamedRow;
     row.values = data;
     row.commit = () => this.commitRow(row);
     return row;
@@ -141,28 +184,45 @@ export class WorksheetWriter {
 
     const w = new XmlWriter();
     w.open("worksheet", { xmlns: NS.spreadsheetml, "xmlns:r": NS.relationships });
-    // Default sheet view + format; `<dimension>` is intentionally omitted (it must precede the views,
-    // which we have already streamed by the time the last row is known — the reader recomputes it).
-    renderSheetViews(w, [], undefined);
-    w.leaf("sheetFormatPr", { defaultRowHeight: 15 });
+    // `<dimension>` is intentionally omitted (it must precede the views, but the sheet's extent is not
+    // known until the last row — the reader recomputes it). Panes + gridlines come from the config.
+    const props = this.sheet.properties;
+    renderSheetViews(w, this.sheet.views, props.showGridLines);
+    w.leaf("sheetFormatPr", {
+      defaultRowHeight: props.defaultRowHeight ?? 15,
+      defaultColWidth: props.defaultColWidth,
+    });
     w.open("sheetData");
     this.workbook.pushSheetChunk(w.toString());
   }
 
-  /** Finalise this sheet: close `<sheetData>`, flush `<hyperlinks>` + the sheet `.rels`, close the part. */
+  /** Finalise this sheet: close `<sheetData>`, emit every trailing feature in CT_Worksheet order,
+   *  flush the sheet `.rels` + child parts (comments/VML, drawing/media), close the part. */
   commit(): void {
     if (this.committed) return;
     this.ensureStarted();
 
-    // Mirror renderWorksheet's epilogue on the F0 seam: one per-sheet rId allocator backs both the
-    // hyperlink `r:id`s and the sheet `.rels`, and an (empty) extraParts accumulator stands in for the
-    // child parts Track E2 will contribute (drawings/comments) without reshaping this path.
+    // Mirror renderWorksheet's epilogue on the F0 seam: one per-sheet rId allocator backs the
+    // hyperlink/drawing/comment `r:id`s and the sheet `.rels`; one extraParts accumulator gathers the
+    // child parts (drawings + media, comments + VML) this sheet contributes.
+    const ctx = this.workbook.context;
+    // 1-based sheet position (== rel.sheetId by construction) — lets child parts name themselves
+    // deterministically (`drawing{n}.xml`, `comments{n}.xml`); `renderSheetComments` reads it off ctx.
+    ctx.sheetNumber = this.rel.sheetId;
     const alloc = createSheetRelAllocator();
     const extraParts: ExtraPart[] = [];
+    const model = this.sheet.model;
 
     const w = new XmlWriter({ declaration: false });
     w.close("sheetData");
+    // CT_Worksheet order (matches the buffered renderWorksheet epilogue exactly).
+    renderAutoFilter(w, model.autoFilter);
+    renderMergeCells(w, model.merges);
+    renderConditionalFormatting(w, model.conditionalFormattings, ctx);
+    renderDataValidations(w, model.dataValidations);
     renderHyperlinks(w, this.hyperlinks, alloc);
+    renderImages(w, this.sheet, alloc, extraParts, ctx.sheetNumber);
+    renderSheetComments(w, model.comments, ctx, alloc, extraParts);
     w.close("worksheet");
     this.workbook.pushSheetChunk(w.toString(), true);
 
@@ -172,11 +232,9 @@ export class WorksheetWriter {
         renderWorksheetRels(alloc.rels),
       );
     }
-    // Child parts (XML + media) land at their declared archive paths, once per sheet. Empty in E1.
-    for (const part of extraParts) {
-      if (typeof part.data === "string") this.workbook.addPart(part.path, part.data);
-      else this.workbook.addBinaryPart(part.path, part.data);
-    }
+    // Child parts (XML + media) land at their declared archive paths, once per sheet; their
+    // content-type Defaults/Overrides fold into `[Content_Types].xml`.
+    for (const part of extraParts) this.workbook.addExtraPart(part);
 
     this.committed = true;
     this.workbook.endSheet(this);
@@ -187,8 +245,9 @@ export class WorkbookWriter implements AsyncIterable<Uint8Array> {
   readonly useSharedStrings: boolean;
   readonly useStyles: boolean;
 
-  /** Backs the doc-metadata accessors below; never gains worksheets (the part renderers read only its
-   *  properties, and take the sheet list explicitly). */
+  /** Backs the doc-metadata accessors below and the image registry (`addImage`/`getImage`) each sheet
+   *  resolves placements against; never gains worksheets (the part renderers read only its properties
+   *  and image pool, and take the sheet list explicitly). */
   private readonly meta = new Workbook();
   private readonly encoder = new TextEncoder();
   private readonly sink = new QueueSink();
@@ -198,6 +257,10 @@ export class WorkbookWriter implements AsyncIterable<Uint8Array> {
   private readonly cellStyles: Styles;
   private cfPriority = 0;
   private ctx?: WorksheetContext;
+  /** Content-type Defaults/Overrides gathered from committed sheets' child parts (drawings/media,
+   *  comments/VML), folded into `[Content_Types].xml` at {@link commit}. */
+  private readonly extraDefaults: { extension: string; contentType: string }[] = [];
+  private readonly extraOverrides: { partName: string; contentType: string }[] = [];
 
   private readonly rels: SheetRel[] = [];
   private readonly writers: WorksheetWriter[] = [];
@@ -231,17 +294,29 @@ export class WorkbookWriter implements AsyncIterable<Uint8Array> {
     for (const r of this.rels) {
       if (r.name.toLowerCase() === lower) throw new DuplicateWorksheetNameError(resolvedName);
     }
+    const state = options?.state ?? "visible";
     const rel: SheetRel = {
       rId: `rId${index + 1}`,
       fileName: `sheet${index + 1}.xml`,
       sheetId: index + 1,
       name: resolvedName,
-      state: options?.state ?? "visible",
+      state,
     };
     this.rels.push(rel);
-    const ws = new WorksheetWriter(this, rel);
+    // A real model worksheet backs the writer (row host + feature store). It is bound to `meta` so its
+    // image placements resolve against the workbook image registry, but it is never added to `meta`'s
+    // sheet list (the part renderers take the sheet list explicitly via `rels`).
+    const sheet = new Worksheet(this.meta, rel.sheetId, resolvedName, index);
+    sheet.state = state;
+    const ws = new WorksheetWriter(this, rel, sheet);
     this.writers.push(ws);
     return ws;
+  }
+
+  /** Intern image bytes once and return the numeric `imageId` for {@link WorksheetWriter.addImage}
+   *  (mirrors the buffered `Workbook.addImage`). */
+  addImage(options: AddImageOptions): number {
+    return this.meta.addImage(options);
   }
 
   /** Finalise every part after the sheets: `[Content_Types]`, rels, styles, sharedStrings (if used),
@@ -281,7 +356,12 @@ export class WorkbookWriter implements AsyncIterable<Uint8Array> {
     const put = (path: string, xml: string): void => this.addPart(path, xml);
     put(
       PART_PATH.contentTypes,
-      renderContentTypes({ worksheetFiles: this.rels.map((s) => s.fileName), hasSharedStrings }),
+      renderContentTypes({
+        worksheetFiles: this.rels.map((s) => s.fileName),
+        hasSharedStrings,
+        extraDefaults: this.extraDefaults,
+        extraOverrides: this.extraOverrides,
+      }),
     );
     put(PART_PATH.rootRels, renderRootRels());
     put(PART_PATH.coreProps, renderCoreProps(this.meta));
@@ -348,9 +428,16 @@ export class WorkbookWriter implements AsyncIterable<Uint8Array> {
     this.zip.addFile(path, this.encoder.encode(xml));
   }
 
-  /** Add a raw-bytes part (worksheet media). The E2 seam for image `extraParts`; unused in E1. */
-  addBinaryPart(path: string, data: Uint8Array): void {
-    this.zip.addFile(path, data);
+  /** Write one worksheet child part (drawing/comments XML or raw media) into the archive and record
+   *  its content-type Default/Override so `[Content_Types].xml` can declare it. Mirrors the buffered
+   *  writer's `collectWorksheetParts`. Defaults are deduped by extension inside `renderContentTypes`. */
+  addExtraPart(part: ExtraPart): void {
+    if (typeof part.data === "string") this.addPart(part.path, part.data);
+    else this.zip.addFile(part.path, part.data);
+    if (part.contentType) {
+      this.extraOverrides.push({ partName: `/${part.path}`, contentType: part.contentType });
+    }
+    if (part.defaultFor) this.extraDefaults.push(part.defaultFor);
   }
 
   // --- doc metadata (delegates to the backing model; mirrors ExcelJS's WorkbookWriter) ----------

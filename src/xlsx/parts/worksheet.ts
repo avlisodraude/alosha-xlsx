@@ -178,8 +178,9 @@ export function renderSheetViews(
   w.close("sheetViews");
 }
 
-/** Emit `<autoFilter ref="…">` (CT_Worksheet: after `<sheetData>`, before `<mergeCells>`). */
-function renderAutoFilter(w: XmlWriter, autoFilter: string | undefined): void {
+/** Emit `<autoFilter ref="…">` (CT_Worksheet: after `<sheetData>`, before `<mergeCells>`). Exported
+ *  so the streaming writer can reuse it in the worksheet epilogue. */
+export function renderAutoFilter(w: XmlWriter, autoFilter: string | undefined): void {
   if (!autoFilter) return;
   w.leaf("autoFilter", { ref: autoFilter });
 }
@@ -383,7 +384,9 @@ function formulaCell(r: string, s: number, cell: CellModel, ctx: WorksheetContex
   return w.toString();
 }
 
-function renderMergeCells(w: XmlWriter, merges: string[]): void {
+/** Emit the `<mergeCells>` block (CT_Worksheet: after `<autoFilter>`). Exported for the streaming
+ *  writer's epilogue. */
+export function renderMergeCells(w: XmlWriter, merges: string[]): void {
   if (merges.length === 0) return;
   w.open("mergeCells", { count: merges.length });
   for (const ref of merges) w.leaf("mergeCell", { ref });
@@ -405,8 +408,9 @@ const CF_TEXT_OPERATOR: Record<
 /** Emit the `<conditionalFormatting>` blocks (CT_Worksheet: after `<mergeCells>`, before
  *  `<dataValidations>`). One `<conditionalFormatting sqref>` per block, then its `<cfRule>`s. Rules
  *  with no explicit `priority` draw a workbook-monotonic one; dxf-bearing rules intern their `style`
- *  into the shared `<dxfs>` pool. See docs/CONDITIONAL-FORMATTING-SPEC.md §2b. */
-function renderConditionalFormatting(
+ *  into the shared `<dxfs>` pool. See docs/CONDITIONAL-FORMATTING-SPEC.md §2b. Exported so the
+ *  streaming writer can reuse it in the worksheet epilogue. */
+export function renderConditionalFormatting(
   w: XmlWriter,
   cfs: ConditionalFormatting[] | undefined,
   ctx: WorksheetContext,
@@ -558,8 +562,12 @@ function textRuleFormula(
 }
 
 /** Emit the `<dataValidations>` block (dropdowns + value constraints). Lives entirely in the sheet —
- *  no relationships or extra parts. See docs/DATA-VALIDATION-SPEC.md §3. */
-function renderDataValidations(w: XmlWriter, validations: DataValidationModel[] | undefined): void {
+ *  no relationships or extra parts. See docs/DATA-VALIDATION-SPEC.md §3. Exported for the streaming
+ *  writer's epilogue. */
+export function renderDataValidations(
+  w: XmlWriter,
+  validations: DataValidationModel[] | undefined,
+): void {
   if (!validations || validations.length === 0) return;
 
   w.open("dataValidations", { count: validations.length });
@@ -621,8 +629,9 @@ export function renderHyperlinks(
 /** Emit the legacy-comment wiring for a sheet with `cell.note`s (docs/COMMENTS-SPEC.md §1): push the
  *  `comments{n}.xml` note table and the `vmlDrawing{n}.vml` anchor part as F0 `ExtraPart`s, allocate a
  *  rel for each off the shared sheet allocator, and emit `<legacyDrawing r:id>` (the vmlDrawing rId) as
- *  the sheet's last child. Authors default to `"Author"` when unset (ExcelJS parity). */
-function renderSheetComments(
+ *  the sheet's last child. Authors default to `"Author"` when unset (ExcelJS parity). Exported so the
+ *  streaming writer can flush comments collected across its incremental row commits. */
+export function renderSheetComments(
   w: XmlWriter,
   comments: CommentModel[] | undefined,
   ctx: WorksheetContext,
@@ -667,8 +676,9 @@ function renderSheetComments(
  *  rId backing `<drawing r:id>`→`drawing{n}.xml`; each placed image then draws a *drawing-local* rId
  *  (`rId1, rId2, …`, a separate namespace) that is both the `<a:blip r:embed>` value and the `Id` of the
  *  image `<Relationship>` in `drawing{n}.xml.rels`. Media bytes and their format come from the workbook
- *  image registry; the workbook-unique `k` in `media/image{k}.{ext}` is the registry's `imageId + 1`. */
-function renderImages(
+ *  image registry; the workbook-unique `k` in `media/image{k}.{ext}` is the registry's `imageId + 1`.
+ *  Exported so the streaming writer can flush a sheet's drawing part + media at `ws.commit()`. */
+export function renderImages(
   w: XmlWriter,
   ws: Worksheet,
   alloc: SheetRelAllocator,

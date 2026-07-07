@@ -62,7 +62,8 @@
     "lint": "biome check .",
     "format": "biome format --write .",
     "typecheck": "tsc --noEmit",
-    "bench": "tsx bench/index.ts"
+    "bench": "tsx bench/index.ts",
+    "bench:stream": "tsx bench/streaming.ts"
   },
   "dependencies": {
     "fflate": "^0.8.3"
