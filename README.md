@@ -102,6 +102,34 @@ import `node:fs/promises` so browser bundles that only use the buffer functions 
 `writeWorkbookBuffer` accepts a `WriteOptions` (`useSharedStrings`, `useStyles`); the read
 functions accept a `ReadOptions` (reserved for future use).
 
+## Streaming writes for large workbooks
+
+For exports too big to hold in memory, the streaming `WorkbookWriter` (ExcelJS's
+`stream.xlsx.WorkbookWriter` shape) renders and deflates each row into the output archive as you
+commit it, keeping peak memory roughly flat regardless of row count — at 500k rows × 5 cols it
+uses **~15.6× less peak memory** than the buffered writer at **~1.9× the throughput**
+([benchmarks](https://github.com/avlisodraude/alosha-xlsx/blob/main/BENCHMARKS.md)):
+
+```ts
+import { WorkbookWriter } from "@alosha/xlsx";
+
+const wb = new WorkbookWriter({ filename: "big-report.xlsx" });
+const ws = wb.addWorksheet("Data");
+for (const record of hugeDataset) {
+  ws.addRow([record.id, record.name, record.amount]).commit(); // flushed now
+}
+ws.commit();
+await wb.commit();
+```
+
+Instead of a `filename`, pass a Node `Writable` (`{ stream: res }`) — or pass nothing and the
+writer itself is an `AsyncIterable<Uint8Array>` of archive chunks (browser/edge-safe). Strings
+default to inline (`useSharedStrings: false`) so committed rows retain nothing. Styles, merges,
+panes/auto-filter, hyperlinks, data validation, conditional formatting, comments, and images all
+stream with buffered-writer parity; column widths (`<cols>`) and a streaming *reader* are not
+supported yet. See [`docs/STREAMING.md`](https://github.com/avlisodraude/alosha-xlsx/blob/main/docs/STREAMING.md)
+for the full guide.
+
 ## Feature matrix
 
 | Area | Read | Write | Notes |
@@ -122,7 +150,7 @@ functions accept a `ReadOptions` (reserved for future use).
 | Hyperlink cells (external URL/mailto) | ✅ | ✅ | real OOXML relationship, round-trips as `{ text, hyperlink, tooltip? }`; internal `location=` links deferred |
 | Data validation (dropdowns, constraints) | ✅ | ✅ | same-sheet ranges and inline lists; cross-sheet list refs deferred |
 | Conditional formatting (`cellIs`, `expression`, text-contains family, `top10`, `aboveAverage`/`belowAverage`, `duplicateValues`/`uniqueValues`, `colorScale`, `dataBar`, `iconSet`) | ✅ | ✅ | differential styles dedup into a `<dxfs>` pool; x14 dataBar gradient/axis/negative-fill, `timePeriod` rules, and custom iconSet icons deferred |
-| Streaming read/write | ❌ | ❌ | deferred |
+| Streaming write (`WorkbookWriter`) | ❌ | ✅ | bounded-memory row-by-row writes, full feature parity except `<cols>`/column widths; streaming read deferred — see [`docs/STREAMING.md`](https://github.com/avlisodraude/alosha-xlsx/blob/main/docs/STREAMING.md) |
 | Embedded images (`workbook.addImage` + `worksheet.addImage`) | ✅ | ✅ | two-cell and one-cell/pixel-extent anchors; cropping/rotation, background/header-footer images, SVG, and EMF/WMF deferred |
 | Charts | ❌ | ❌ | deferred |
 | Comments (`cell.note`) | ✅ | ✅ | note/author table (`comments{n}.xml`) + legacy VML anchor (`vmlDrawing{n}.vml`); threaded/modern comments and box geometry deferred |
@@ -144,7 +172,7 @@ behave as you'd expect. Common differences to watch for:
 - **ESM-first.** The package is ESM with a CJS fallback; prefer `import` over `require`.
 
 Not everything ExcelJS does is implemented yet — check the feature matrix and limitations before
-porting a workbook that leans on charts or streaming.
+porting a workbook that leans on charts or streaming reads.
 
 **Want a one-line import swap instead?** `@alosha/xlsx/compat` is an ExcelJS-shaped drop-in — same
 `cell.type` numbers, same style-setter precedence, same `addRow`/`row.values`/`worksheet.columns`
@@ -158,8 +186,13 @@ behavioural notes to check before porting.
   round-trip as real OOXML relationships (`{ text, hyperlink, tooltip? }`). Links to a location
   within the same workbook (ExcelJS's `location="Sheet2!A1"` form, no external relationship) aren't
   written or read yet.
-- **No streaming.** Reading and writing are buffer-based (the whole workbook lives in memory). A
-  streaming API for very large sheets is deferred.
+- **Streaming is write-only.** The streaming `WorkbookWriter` covers writes
+  ([`docs/STREAMING.md`](https://github.com/avlisodraude/alosha-xlsx/blob/main/docs/STREAMING.md));
+  reading is still buffer-based (the whole workbook lives in memory) — a streaming `WorkbookReader`
+  is deferred. In streaming mode, column widths / `<cols>` are not yet supported (`getColumn` /
+  `columns` are intentionally not exposed on the streaming worksheet) — a planned follow-up — and
+  `ExcelJS.stream.xlsx.WorkbookWriter` in `@alosha/xlsx/compat` still throws; import
+  `WorkbookWriter` from the main entry instead.
 - **Embedded images** support the two anchor forms ExcelJS uses day-to-day — a two-cell range
   (`"B2:D6"` or `{ tl, br }`) and a one-cell position with a pixel extent (`{ tl, ext }`). Image
   cropping/rotation/effects, hyperlinked images, header/footer (background) images, SVG, and
