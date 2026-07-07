@@ -26,7 +26,8 @@ export type AloshaXlsxErrorCode =
   | "UNSUPPORTED_FEATURE"
   | "INVALID_PACKAGE"
   | "INVALID_PANE"
-  | "INVALID_CONDITIONAL_FORMATTING";
+  | "INVALID_CONDITIONAL_FORMATTING"
+  | "INVALID_IMAGE_ANCHOR";
 
 /**
  * Base class for all library errors. Abstract — never thrown directly; always a concrete subclass.
@@ -227,5 +228,17 @@ export class InvalidConditionalFormattingError extends AloshaXlsxError {
     public readonly value: string,
   ) {
     super(`Invalid <cfRule> ${attribute}: ${JSON.stringify(value)} is not a number.`);
+  }
+}
+
+/**
+ * An image anchor passed to `worksheet.addImage` is not one of the accepted forms: a `"B2:D6"` range
+ * string, `{ tl, br }`, or `{ tl, ext }` with a positive pixel extent (see docs/IMAGES-DRAWINGS-SPEC.md
+ * §1). A malformed range *string* surfaces {@link InvalidRangeError} from the decoder instead.
+ */
+export class InvalidImageAnchorError extends AloshaXlsxError {
+  readonly code = "INVALID_IMAGE_ANCHOR" as const;
+  constructor(public readonly anchor: unknown) {
+    super(`Invalid image anchor: ${JSON.stringify(anchor)}`);
   }
 }

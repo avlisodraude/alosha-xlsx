@@ -41,6 +41,18 @@ export type {
 export { DATA_VALIDATION_OPERATOR_TYPES, DataValidations } from "./data-validation.js";
 export type { ErrorCode } from "./enums.js";
 export { CellType, FormulaType } from "./enums.js";
+export type {
+  AddImageOptions,
+  CellPosition,
+  ImageAnchor,
+  ImageExtension,
+  OneCellAnchor,
+  ResolvedImageAnchor,
+  TwoCellAnchor,
+  WorkbookImage,
+  WorksheetImage,
+} from "./image.js";
+export { cloneAnchor, ImageRegistry, resolveImageAnchor } from "./image.js";
 export type { RowModel } from "./row.js";
 export { Row } from "./row.js";
 export type {

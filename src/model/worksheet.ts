@@ -22,6 +22,7 @@ import { type CommentModel, Comments } from "./comment.js";
 import type { ConditionalFormatting } from "./conditional-formatting.js";
 import { type DataValidationModel, DataValidations } from "./data-validation.js";
 import { CellType } from "./enums.js";
+import { cloneAnchor, type ImageAnchor, resolveImageAnchor, type WorksheetImage } from "./image.js";
 import { Row, type RowModel } from "./row.js";
 import type { Color, Style } from "./style.js";
 import type { RowValues } from "./types.js";
@@ -87,6 +88,8 @@ export interface WorksheetModel {
   conditionalFormattings?: ConditionalFormatting[];
   /** `<autoFilter ref="…">`, an A1 range like `"A1:D1"`. */
   autoFilter?: string;
+  /** Images placed on the sheet, referencing the workbook registry by `imageId`. */
+  images?: WorksheetImage[];
   pageSetup?: unknown;
   headerFooter?: unknown;
 }
@@ -163,6 +166,8 @@ export class Worksheet implements WorksheetHost {
   private readonly _comments = new Comments();
   /** Conditional-formatting blocks in insertion order (sheet-level, not cell-routed). */
   private _conditionalFormattings: ConditionalFormatting[] = [];
+  /** Images placed on the sheet, in insertion order. */
+  private _images: WorksheetImage[] = [];
 
   constructor(workbook: Workbook, id: number, name: string, orderNo: number) {
     this.workbook = workbook;
@@ -591,6 +596,24 @@ export class Worksheet implements WorksheetHost {
     this._conditionalFormattings = this._conditionalFormattings.filter((cf) => cf.ref !== ref);
   }
 
+  // --- images -----------------------------------------------------------------------------------
+
+  /** Images placed on the sheet, in insertion order (a fresh copy — callers cannot mutate). */
+  get images(): WorksheetImage[] {
+    return this._images.map((img) => ({ imageId: img.imageId, range: cloneAnchor(img.range) }));
+  }
+
+  /**
+   * Place the workbook-registered image `imageId` on the sheet at `anchor` (a `"B2:D6"` range string,
+   * an explicit `{ tl, br }`, or a one-cell `{ tl, ext }`). A malformed anchor throws a typed
+   * {@link InvalidImageAnchorError} (or {@link InvalidRangeError} for a bad range string).
+   */
+  addImage(imageId: number, anchor: ImageAnchor): WorksheetImage {
+    const placed: WorksheetImage = { imageId, range: resolveImageAnchor(anchor) };
+    this._images.push(placed);
+    return placed;
+  }
+
   get dimensions(): Range {
     let top = Number.POSITIVE_INFINITY;
     let left = Number.POSITIVE_INFINITY;
@@ -634,6 +657,12 @@ export class Worksheet implements WorksheetHost {
       }));
     }
     if (this.autoFilter !== undefined) m.autoFilter = this.autoFilter;
+    if (this._images.length > 0) {
+      m.images = this._images.map((img) => ({
+        imageId: img.imageId,
+        range: cloneAnchor(img.range),
+      }));
+    }
     if (this.pageSetup !== undefined) m.pageSetup = this.pageSetup;
     if (this.headerFooter !== undefined) m.headerFooter = this.headerFooter;
     return m;
@@ -649,6 +678,10 @@ export class Worksheet implements WorksheetHost {
     this.autoFilter = m.autoFilter;
     this.pageSetup = m.pageSetup;
     this.headerFooter = m.headerFooter;
+    this._images = (m.images ?? []).map((img) => ({
+      imageId: img.imageId,
+      range: cloneAnchor(img.range),
+    }));
 
     this._rows.clear();
     this._columns.clear();

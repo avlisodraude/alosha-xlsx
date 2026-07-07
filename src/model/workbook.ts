@@ -3,6 +3,7 @@
 // `orderNo` is kept equal to the array index; the deprecated tabColor-as-string branch is dropped.
 
 import { DuplicateWorksheetNameError } from "../errors.js";
+import { type AddImageOptions, ImageRegistry, type WorkbookImage } from "./image.js";
 import {
   type AddWorksheetOptions,
   validateWorksheetNameFormat,
@@ -52,6 +53,8 @@ export interface WorkbookModel {
   views: WorkbookView[];
   sheets: WorksheetModel[];
   nextId: number;
+  /** Interned images keyed by index (`imageId`); omitted when the workbook has none. */
+  images?: WorkbookImage[];
 }
 
 export class Workbook {
@@ -75,6 +78,7 @@ export class Workbook {
   private readonly _byId = new Map<number, Worksheet>();
   private _sheets: Worksheet[] = [];
   private _nextId = 1;
+  private readonly _images = new ImageRegistry();
 
   constructor() {
     const now = new Date();
@@ -150,6 +154,18 @@ export class Workbook {
     for (const ws of this._sheets) cb(ws, ws.id);
   }
 
+  // --- images -----------------------------------------------------------------------------------
+
+  /** Interns image bytes once and returns the numeric `imageId` used by `worksheet.addImage`. */
+  addImage(options: AddImageOptions): number {
+    return this._images.add(options);
+  }
+
+  /** The interned image for `imageId` (bytes + format), or `undefined` if none. */
+  getImage(imageId: number): WorkbookImage | undefined {
+    return this._images.get(imageId);
+  }
+
   // --- model ------------------------------------------------------------------------------------
 
   get model(): WorkbookModel {
@@ -162,6 +178,7 @@ export class Workbook {
       sheets: this._sheets.map((w) => w.model),
       nextId: this._nextId,
     };
+    if (this._images.size > 0) m.images = this._images.model;
     if (this.creator !== undefined) m.creator = this.creator;
     if (this.lastModifiedBy !== undefined) m.lastModifiedBy = this.lastModifiedBy;
     if (this.lastPrinted !== undefined) m.lastPrinted = this.lastPrinted;
@@ -191,6 +208,7 @@ export class Workbook {
     this.properties = { ...m.properties };
     this.calcProperties = { ...m.calcProperties };
     this.views = m.views.map((v) => ({ ...v }));
+    this._images.model = m.images ?? [];
 
     this._byId.clear();
     this._sheets = [];
