@@ -19,7 +19,7 @@ export type {
   DataValidationOperator,
   DataValidationType,
 } from "./data-validation.js";
-export { DataValidations } from "./data-validation.js";
+export { DATA_VALIDATION_OPERATOR_TYPES, DataValidations } from "./data-validation.js";
 export type { ErrorCode } from "./enums.js";
 export { CellType, FormulaType } from "./enums.js";
 export type { RowModel } from "./row.js";

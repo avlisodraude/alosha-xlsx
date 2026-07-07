@@ -28,6 +28,16 @@ export type DataValidationOperator =
 
 export type DataValidationErrorStyle = "stop" | "warning" | "information";
 
+/** The types that carry a comparison `operator` (`list`/`custom` never do). Shared by the writer
+ *  (which omits `operator` outside this set) and the reader (which only reads it back for these). */
+export const DATA_VALIDATION_OPERATOR_TYPES = new Set<DataValidationType>([
+  "whole",
+  "decimal",
+  "date",
+  "time",
+  "textLength",
+]);
+
 /** Mirrors ExcelJS's `cell.dataValidation` shape (so the compat facade is a pass-through). */
 export interface DataValidation {
   type: DataValidationType;

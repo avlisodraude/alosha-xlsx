@@ -9,8 +9,13 @@
 //   hyperlink-> its display text as a string            formula -> <f>expr</f> + typed cached <v>
 //   merge-slave / styled-empty -> empty <c> carrying only its style   null (no style) -> skipped
 
-import type { CellModel, DataValidationModel, DataValidationType } from "../../model/index.js";
-import { CellType, type RichText, type Worksheet } from "../../model/index.js";
+import type { CellModel, DataValidationModel } from "../../model/index.js";
+import {
+  CellType,
+  DATA_VALIDATION_OPERATOR_TYPES,
+  type RichText,
+  type Worksheet,
+} from "../../model/index.js";
 import { XmlWriter } from "../../xml/index.js";
 import { dateToSerial } from "../date.js";
 import type { SharedStrings } from "../shared-strings.js";
@@ -265,15 +270,6 @@ function renderMergeCells(w: XmlWriter, merges: string[]): void {
   w.close("mergeCells");
 }
 
-/** OOXML `CT_DataValidation` types that carry a comparison `operator` (`list`/`custom` do not). */
-const OPERATOR_TYPES = new Set<DataValidationType>([
-  "whole",
-  "decimal",
-  "date",
-  "time",
-  "textLength",
-]);
-
 /** Emit the `<dataValidations>` block (dropdowns + value constraints). Lives entirely in the sheet —
  *  no relationships or extra parts. See docs/DATA-VALIDATION-SPEC.md §3. */
 function renderDataValidations(w: XmlWriter, validations: DataValidationModel[] | undefined): void {
@@ -283,7 +279,7 @@ function renderDataValidations(w: XmlWriter, validations: DataValidationModel[] 
   for (const dv of validations) {
     // `operator` is meaningful only for the numeric/length types; `formula2` only for a two-sided
     // comparison (`between`/`notBetween`).
-    const operator = OPERATOR_TYPES.has(dv.type) ? dv.operator : undefined;
+    const operator = DATA_VALIDATION_OPERATOR_TYPES.has(dv.type) ? dv.operator : undefined;
     w.open("dataValidation", {
       type: (dv.type as string) === "none" ? undefined : dv.type,
       operator,
