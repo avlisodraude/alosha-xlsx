@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.5.0
+
+### Minor Changes
+
+- Cell data validations — dropdowns and value constraints (write + read + compat).
+
+  Cells and ranges can now carry a data validation: a **list dropdown** (an inline
+  `'"Yes,No,Maybe"'` or a same-sheet range `"$E$1:$E$5"`), a numeric/date/length constraint
+  (`whole` / `decimal` / `date` / `time` / `textLength`) with an operator
+  (`between` / `notBetween` / `equal` / `notEqual` / `greaterThan` / `lessThan` /
+  `greaterThanOrEqual` / `lessThanOrEqual`) and one or two formulae, or a `custom` boolean formula —
+  plus the usual flags and messages (`allowBlank`, `showInputMessage`, `showErrorMessage`,
+  `errorStyle`, `errorTitle`, `error`, `promptTitle`, `prompt`, `showDropDown`). Applied per cell via
+  `cell.dataValidation` or per range via `worksheet.dataValidations.add(sqref, dv)`, where `sqref` may
+  be a single address, a range, or space-separated ranges.
+
+  - **Model.** New `DataValidation` type and a per-worksheet `DataValidations` manager
+    (`add` / `find` / `remove` / `model`, keyed by `sqref`); `cell.dataValidation` get/set resolves
+    through it, and validations round-trip through `WorksheetModel` like merges.
+  - **Write.** A `<dataValidations>` block is emitted in the sheet, in CT_Worksheet order (after
+    `<mergeCells>`, before `<hyperlinks>`), so the validation re-opens in Excel/LibreOffice as a
+    working dropdown/constraint. No extra parts or relationships.
+  - **Read.** The `<dataValidations>` block parses back to an equal model; malformed entries are
+    skipped rather than throwing.
+  - **Compat.** `@alosha/xlsx/compat`'s `cell.dataValidation` and `worksheet.dataValidations` are now
+    a real pass-through (previously threw `UnsupportedFeatureError`) — the core shape already matches
+    ExcelJS's `DataValidations`.
+
+  **OOXML `showDropDown` inversion:** the OOXML attribute is inverted — `showDropDown="1"` _hides_ the
+  dropdown. The model uses the intuitive sense, so `showDropDown: false` means "hide it" and maps to
+  the attribute; unset/`true` shows the dropdown (the default) and emits nothing.
+
+  **Deferred:** a list that references a range on **another sheet** (the x14 / `<extLst>` form Excel
+  uses for cross-sheet list refs) is not yet supported — only same-sheet ranges and inline lists.
+
 ## 0.4.0
 
 ### Minor Changes
