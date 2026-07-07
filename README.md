@@ -159,8 +159,9 @@ behavioural notes to check before porting.
 - **No drawings, images, or charts.** These parts are ignored on read and not emitted on write.
 - **No data validation, conditional formatting, or comments** yet.
 
-See [`BENCHMARKS.md`](./BENCHMARKS.md) for write/read throughput and output-size numbers against
-ExcelJS, and [`CHANGELOG.md`](./CHANGELOG.md) for release notes.
+See [`BENCHMARKS.md`](https://github.com/avlisodraude/alosha-xlsx/blob/main/BENCHMARKS.md) for
+write/read throughput and output-size numbers against ExcelJS, and
+[`CHANGELOG.md`](https://github.com/avlisodraude/alosha-xlsx/blob/main/CHANGELOG.md) for release notes.
 
 ## Development
 

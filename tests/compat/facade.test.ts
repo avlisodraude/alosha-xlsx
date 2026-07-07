@@ -195,3 +195,50 @@ describe("compat facade — deferred surface throws UnsupportedFeatureError (§6
     expect(() => new ExcelJS.stream.xlsx.WorkbookReader()).toThrow(UnsupportedFeatureError);
   });
 });
+
+describe("compat facade — eachRow/eachCell skip empty like ExcelJS (0.3.1)", () => {
+  it("default iteration drops empty rows and explicitly-null cells", () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("S");
+    ws.getCell("A1").value = "keep";
+    ws.getCell("B1").value = null; // explicitly nulled -> skipped by default
+    ws.getRow(2); // touched but valueless row -> skipped by default
+    ws.getCell("A3").value = 7;
+
+    const visitedRows: number[] = [];
+    ws.eachRow((_row, n) => visitedRows.push(n));
+    expect(visitedRows).toEqual([1, 3]); // row 2 skipped
+
+    const cellValues: unknown[] = [];
+    ws.getRow(1).eachCell((cell) => cellValues.push(cell.value));
+    expect(cellValues).toEqual(["keep"]); // B1 (null) skipped
+  });
+
+  it("callback cells are still proxied (report ExcelJS ValueType numbers)", () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("S");
+    ws.getCell("A1").value = "hi";
+    let seenType: unknown;
+    ws.getRow(1).eachCell((cell) => {
+      seenType = cell.type;
+    });
+    expect(seenType).toBe(ValueType.String); // 3, not the core CellType number
+  });
+
+  it("includeEmpty:true still enumerates the empty rows/cells", () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("S");
+    ws.getCell("A1").value = "x";
+    ws.getCell("B1").value = null;
+    ws.getRow(2);
+    ws.getCell("A3").value = "y";
+
+    const rows: number[] = [];
+    ws.eachRow({ includeEmpty: true }, (_row, n) => rows.push(n));
+    expect(rows).toEqual([1, 2, 3]); // row 2 included
+
+    const cols: number[] = [];
+    ws.getRow(1).eachCell({ includeEmpty: true }, (_cell, c) => cols.push(c));
+    expect(cols).toEqual([1, 2]); // B1 included
+  });
+});

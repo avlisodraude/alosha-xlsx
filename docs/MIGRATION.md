@@ -79,12 +79,6 @@ list, that call throws immediately so you find out at the call site, not by diff
 These aren't compat-specific bugs — they're pre-existing `@alosha/xlsx` core-model behaviours that a
 migrated file can still trip over, surfaced while building the parity corpus (below):
 
-- **`eachRow`/`eachCell` without `includeEmpty` enumerate slightly more permissively than ExcelJS.**
-  ExcelJS's default (non-`includeEmpty`) `eachRow`/`eachCell` skip a row/cell that has been explicitly
-  set to `null` (or never held a value); `@alosha/xlsx`'s core model still yields any row/cell that was
-  ever touched via `getRow`/`getCell`, even if its value is currently `null`. If your code depends on
-  `null`-valued cells vanishing from a default iteration, pass `{ includeEmpty: true }` explicitly and
-  filter yourself, or check `cell.type !== ExcelJS.ValueType.Null` in the callback.
 - **An unstyled cell's `fill` is `undefined`, not `{ pattern: "none" }`.** ExcelJS always resolves a
   cell's fill from the styles pool, so an unstyled cell still reports `{ type: "pattern", pattern:
   "none" }`. `@alosha/xlsx`'s reader treats the baseline "no fill" style id as "nothing to report" and

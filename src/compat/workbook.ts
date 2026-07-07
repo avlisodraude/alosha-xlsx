@@ -22,7 +22,7 @@
 import { UnsupportedFeatureError } from "../errors.js";
 import type { XlsxAccessor } from "../index.js";
 import { Cell, Column, Row, Workbook, Worksheet } from "../index.js";
-import type { Style } from "../model/index.js";
+import { CellType, type Style } from "../model/index.js";
 import { applyExcelJsStyle } from "./style-compat.js";
 import { toExcelJSValueType } from "./value-type.js";
 
@@ -149,6 +149,29 @@ function reflectGet(target: object, prop: string | symbol): unknown {
   return wrap(value);
 }
 
+/** ExcelJS parity for `eachRow`/`eachCell`: without `includeEmpty`, ExcelJS drops rows/cells that are
+ *  empty (never held a value, or were explicitly set to `null`), while our core model still yields any
+ *  row/cell ever touched via `getRow`/`getCell`. This bridges that gap on the compat iteration path —
+ *  `isEmpty` tests the raw model item, and surviving items are wrapped like every other facade boundary
+ *  (so callbacks receive proxied rows/cells, not raw ones). `includeEmpty: true` passes straight through
+ *  to the core's full enumeration. */
+function eachWithEmptyFilter<T>(
+  each: (opts: { includeEmpty: boolean }, cb: (item: T, n: number) => void) => void,
+  isEmpty: (item: T) => boolean,
+  optsOrCb: { includeEmpty?: boolean } | ((item: unknown, n: number) => void),
+  maybeCb?: (item: unknown, n: number) => void,
+): void {
+  const includeEmpty = typeof optsOrCb === "object" ? optsOrCb.includeEmpty === true : false;
+  const cb = (typeof optsOrCb === "function" ? optsOrCb : maybeCb) as (
+    item: unknown,
+    n: number,
+  ) => void;
+  each({ includeEmpty }, (item, n) => {
+    if (!includeEmpty && isEmpty(item)) return;
+    cb(wrap(item), n);
+  });
+}
+
 // --- the per-level proxies ----------------------------------------------------------------------
 
 function proxyCell(cell: Cell): Cell {
@@ -189,6 +212,19 @@ function proxyRow(row: Row): Row {
   const proxy = new Proxy(row, {
     get(target, prop) {
       if (prop === RAW) return target;
+      // ExcelJS parity: default `eachCell` skips empty cells (§ MIGRATION "eachRow/eachCell").
+      if (prop === "eachCell") {
+        return (
+          optsOrCb: { includeEmpty?: boolean } | ((cell: unknown, n: number) => void),
+          maybeCb?: (cell: unknown, n: number) => void,
+        ) =>
+          eachWithEmptyFilter<Cell>(
+            (o, cb) => target.eachCell(o, cb),
+            (cell) => cell.type === CellType.Null,
+            optsOrCb,
+            maybeCb,
+          );
+      }
       return reflectGet(target, prop);
     },
     set(target, prop, value) {
@@ -205,6 +241,19 @@ function proxyColumn(column: Column): Column {
   const proxy = new Proxy(column, {
     get(target, prop) {
       if (prop === RAW) return target;
+      // ExcelJS parity: default `eachCell` skips empty cells (§ MIGRATION "eachRow/eachCell").
+      if (prop === "eachCell") {
+        return (
+          optsOrCb: { includeEmpty?: boolean } | ((cell: unknown, n: number) => void),
+          maybeCb?: (cell: unknown, n: number) => void,
+        ) =>
+          eachWithEmptyFilter<Cell>(
+            (o, cb) => target.eachCell(o, cb),
+            (cell) => cell.type === CellType.Null,
+            optsOrCb,
+            maybeCb,
+          );
+      }
       return reflectGet(target, prop);
     },
     set(target, prop, value) {
@@ -229,6 +278,19 @@ function proxyWorksheet(worksheet: Worksheet): Worksheet {
           "worksheet.dataValidations (data validation)",
           COMPAT_DEFER,
         );
+      }
+      // ExcelJS parity: default `eachRow` skips empty rows (§ MIGRATION "eachRow/eachCell").
+      if (prop === "eachRow") {
+        return (
+          optsOrCb: { includeEmpty?: boolean } | ((row: unknown, n: number) => void),
+          maybeCb?: (row: unknown, n: number) => void,
+        ) =>
+          eachWithEmptyFilter<Row>(
+            (o, cb) => target.eachRow(o, cb),
+            (row) => !row.hasValues,
+            optsOrCb,
+            maybeCb,
+          );
       }
       return reflectGet(target, prop);
     },
