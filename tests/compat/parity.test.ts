@@ -14,13 +14,6 @@
 // Guarded on the optional `exceljs` devDep via a variable import specifier (keeps the suite
 // typechecking/running when it's absent — it just skips, mirroring read-foreign.test.ts /
 // write-workbook.test.ts).
-//
-// Deliberately NOT covered here: hyperlink cell values. `{ text, hyperlink }` round-trips as plain
-// display text through our writer (a known, pre-existing limitation of the core library — see the
-// README's "Known limitations" and docs/MIGRATION.md), so a real exceljs-written hyperlink and a
-// compat-written one are genuinely NOT equivalent after reload (the former keeps its relationship and
-// reports `ValueType.Hyperlink`; the latter degrades to a plain string). Asserting equality here would
-// either be flaky or paper over a real gap, so it's called out as a documented divergence instead.
 
 import { describe, expect, it } from "vitest";
 import { toExcelJSValueType } from "../../src/compat/value-type.js";
@@ -154,6 +147,20 @@ const corpus: CorpusCase[] = [
     },
     sample: { Sheet1: ["A1", "B1"] },
   },
+  {
+    name: "hyperlink cells (external URL, mailto, and a tooltip)",
+    build(wb) {
+      const ws = wb.addWorksheet("Sheet1");
+      ws.getCell("A1").value = { text: "Anthropic", hyperlink: "https://anthropic.com" };
+      ws.getCell("A2").value = {
+        text: "Mail us",
+        hyperlink: "mailto:hi@example.com",
+        tooltip: "Send an email",
+      };
+      ws.getCell("A3").value = "plain text";
+    },
+    sample: { Sheet1: ["A1", "A2", "A3"] },
+  },
 ];
 
 // --- sampling ------------------------------------------------------------------------------------
@@ -179,7 +186,15 @@ function normalizeCellValue(v: unknown): unknown {
       return { richText: (obj.richText as Array<{ text: string }>).map((r) => r.text) };
     }
     if ("error" in obj) return { error: obj.error };
-    if ("text" in obj && "hyperlink" in obj) return { text: obj.text };
+    if ("text" in obj && "hyperlink" in obj) {
+      // ExcelJS's own reader drops `tooltip` when resolving a hyperlink cell (it keeps only the
+      // rId's resolved target, see `hyperlinkMap` in its worksheet-xform) even though it does
+      // write the attribute — so the Step 1 reference (round-tripped through real ExcelJS) can
+      // never carry one. Compare only { text, hyperlink } here; tooltip fidelity for OUR reader
+      // is asserted directly in read-foreign.test.ts / read-roundtrip.test.ts instead.
+      const h = obj as { text: string; hyperlink: string };
+      return { text: h.text, hyperlink: h.hyperlink };
+    }
   }
   return v;
 }

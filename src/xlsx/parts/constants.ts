@@ -43,6 +43,7 @@ export const REL_TYPE = {
   sharedStrings:
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings",
   theme: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme",
+  hyperlink: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
 } as const;
 
 /** Archive paths for the fixed (non-worksheet) parts. Worksheet paths are `xl/worksheets/sheetN.xml`. */
@@ -65,6 +66,16 @@ export interface WorkbookRel {
   type: string;
   /** Target relative to `xl/` (e.g. `worksheets/sheet1.xml`). */
   target: string;
+}
+
+/** A single worksheet-level external relationship (e.g. a hyperlink). Its `rId` is local to the
+ *  worksheet's own `.rels` namespace and must match the `r:id` emitted in the sheet's `<hyperlinks>`. */
+export interface WorksheetRel {
+  rId: string;
+  /** The link destination (e.g. `https://example.com`, `mailto:a@b.c`). */
+  target: string;
+  /** `TargetMode` attribute; external hyperlinks are always `"External"`. */
+  mode: "External";
 }
 
 /** A worksheet's identity within the package: its position-derived file, its `r:id`, and model data. */

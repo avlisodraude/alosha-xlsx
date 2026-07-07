@@ -21,6 +21,7 @@ import type {
 } from "../../model/index.js";
 import { cursor, localName, type XmlCursor, type XmlEvent } from "../../xml/index.js";
 import { serialToDate } from "../date.js";
+import type { ResolvedRel } from "./package.js";
 import { parseRichString } from "./shared-strings.js";
 import type { StyleTable } from "./styles.js";
 
@@ -28,9 +29,19 @@ export interface WorksheetReadContext {
   sharedStrings: (string | RichText)[];
   styles: StyleTable;
   date1904: boolean;
+  /** This worksheet's own relationships (rId -> {type, target, mode}), used to resolve
+   *  `<hyperlinks>` entries. `undefined`/absent means hyperlinks are left as plain string cells. */
+  rels?: Map<string, ResolvedRel>;
 }
 
 type OpenEvent = Extract<XmlEvent, { kind: "open" }>;
+
+/** A parsed `<hyperlink>` sheet-level record, before its `r:id` is resolved to a target. */
+interface HyperlinkRef {
+  ref: string;
+  rId: string;
+  tooltip?: string;
+}
 
 /** Populate an already-created {@link Worksheet} from its sheetN.xml. */
 export function parseWorksheet(ws: Worksheet, xml: string, ctx: WorksheetReadContext): void {
@@ -40,8 +51,10 @@ export function parseWorksheet(ws: Worksheet, xml: string, ctx: WorksheetReadCon
   if (ev?.kind !== "open" || ev.selfClosing) return;
 
   // Merges are collected and applied after every cell is placed, regardless of document order, so a
-  // master cell's value is never clobbered by linking its slaves.
+  // master cell's value is never clobbered by linking its slaves. Hyperlinks are collected the same
+  // way and resolved last, once the display-text cells they point at already hold their string value.
   const merges: string[] = [];
+  const hyperlinks: HyperlinkRef[] = [];
 
   c.eachChild(ev.name, (child) => {
     switch (localName(child.name)) {
@@ -54,12 +67,18 @@ export function parseWorksheet(ws: Worksheet, xml: string, ctx: WorksheetReadCon
       case "mergeCells":
         if (!child.selfClosing) collectMerges(c, child.name, merges);
         break;
+      case "hyperlinks":
+        if (!child.selfClosing) collectHyperlinks(c, child.name, hyperlinks);
+        break;
       default:
         if (!child.selfClosing) c.textUntilClose(child.name);
     }
   });
 
   for (const ref of merges) ws.mergeCells(ref);
+  if (ctx.rels) {
+    for (const link of hyperlinks) applyHyperlink(ws, link, ctx.rels);
+  }
 }
 
 function parseCols(
@@ -269,6 +288,47 @@ function collectMerges(c: XmlCursor, container: string, merges: string[]): void 
       c.textUntilClose(mergeCell.name);
     }
   });
+}
+
+function collectHyperlinks(c: XmlCursor, container: string, hyperlinks: HyperlinkRef[]): void {
+  c.eachChild(container, (child) => {
+    if (localName(child.name) !== "hyperlink") {
+      if (!child.selfClosing) c.textUntilClose(child.name);
+      return;
+    }
+    const ref = child.attrs.ref;
+    const rId = relId(child);
+    if (ref === undefined || rId === "") return;
+    const tooltip = child.attrs.tooltip;
+    hyperlinks.push(tooltip !== undefined ? { ref, rId, tooltip } : { ref, rId });
+  });
+}
+
+/** Resolve a hyperlink record to its worksheet-rels target and set the model value on its (top-left,
+ *  for a range `ref`) cell, keeping that cell's already-parsed string as the display `text`. A rId
+ *  that doesn't resolve (malformed package) is silently skipped. */
+function applyHyperlink(ws: Worksheet, link: HyperlinkRef, rels: Map<string, ResolvedRel>): void {
+  const rel = rels.get(link.rId);
+  if (!rel) return;
+
+  const topLeft = link.ref.split(":")[0] ?? link.ref;
+  const cell = ws.getCell(topLeft);
+  const text = typeof cell.value === "string" ? cell.value : "";
+  cell.value =
+    link.tooltip !== undefined
+      ? { text, hyperlink: rel.target, tooltip: link.tooltip }
+      : { text, hyperlink: rel.target };
+}
+
+/** The `r:id` relationship reference on a `<hyperlink>` element. OOXML fixes the `r` prefix, but
+ *  fall back to any `*:id` attribute so an unconventional namespace prefix still resolves. */
+function relId(el: OpenEvent): string {
+  const direct = el.attrs["r:id"];
+  if (direct !== undefined) return direct;
+  for (const key of Object.keys(el.attrs)) {
+    if (localName(key) === "id") return el.attrs[key] ?? "";
+  }
+  return "";
 }
 
 /** A boolean cell's `<v>` is `1`/`0`; anything else is a malformed package, surfaced as a typed error. */

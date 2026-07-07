@@ -139,6 +139,47 @@ describe("read round-trip — date1904 workbook", () => {
   });
 });
 
+describe("read round-trip — hyperlinks", () => {
+  it("persists external cell hyperlinks as OOXML relationships and reads them back intact", () => {
+    const wb = new Workbook();
+    const ws = wb.addWorksheet("Links");
+    ws.getCell("A1").value = { text: "Anthropic", hyperlink: "https://anthropic.com" };
+    ws.getCell("A2").value = {
+      text: "Mail us",
+      hyperlink: "mailto:hi@example.com",
+      tooltip: "Send an email",
+    };
+    ws.getCell("A3").value = { text: "Docs", hyperlink: "https://docs.example.com/guide" };
+
+    const bytes = writeWorkbookBuffer(wb);
+    const entries = readZipArchive(bytes);
+    expect(entries.has("xl/worksheets/_rels/sheet1.xml.rels")).toBe(true);
+
+    const back = readWorkbookBuffer(bytes);
+    const data = back.getWorksheet("Links");
+    if (!data) throw new Error("Links sheet missing");
+
+    expect(data.getCell("A1").type).toBe(CellType.Hyperlink);
+    expect(data.getCell("A1").value).toEqual({
+      text: "Anthropic",
+      hyperlink: "https://anthropic.com",
+    });
+
+    expect(data.getCell("A2").type).toBe(CellType.Hyperlink);
+    expect(data.getCell("A2").value).toEqual({
+      text: "Mail us",
+      hyperlink: "mailto:hi@example.com",
+      tooltip: "Send an email",
+    });
+
+    expect(data.getCell("A3").type).toBe(CellType.Hyperlink);
+    expect(data.getCell("A3").value).toEqual({
+      text: "Docs",
+      hyperlink: "https://docs.example.com/guide",
+    });
+  });
+});
+
 describe("read path — typed errors", () => {
   it("throws InvalidPackageError on a truncated/corrupt zip", () => {
     expect(() => readWorkbookBuffer(new Uint8Array([1, 2, 3, 4, 5]))).toThrow(InvalidPackageError);

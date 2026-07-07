@@ -17,7 +17,7 @@ import { renderRootRels } from "./parts/root-rels.js";
 import { renderTheme } from "./parts/theme.js";
 import { renderWorkbook } from "./parts/workbook.js";
 import { renderWorkbookRels } from "./parts/workbook-rels.js";
-import { renderWorksheet } from "./parts/worksheet.js";
+import { type RenderedWorksheet, renderWorksheet } from "./parts/worksheet.js";
 import { createSharedStrings } from "./shared-strings.js";
 import { createStyles, type Styles } from "./styles.js";
 
@@ -55,7 +55,7 @@ export function writeWorkbookBuffer(wb: Workbook, options?: WriteOptions): Uint8
   const ctx = { styles: cellStyles, sharedStrings, useSharedStrings, date1904 };
 
   // 1. Worksheets first — this is what fills the shared-strings and styles pools.
-  const worksheetXml = new Map<string, string>();
+  const worksheetXml = new Map<string, RenderedWorksheet>();
   worksheets.forEach((ws, i) => {
     worksheetXml.set(sheetRels[i]!.fileName, renderWorksheet(ws, ctx));
   });
@@ -108,7 +108,12 @@ export function writeWorkbookBuffer(wb: Workbook, options?: WriteOptions): Uint8
   put(PART_PATH.styles, styles.toXml());
   if (sharedStringsXml !== undefined) put(PART_PATH.sharedStrings, sharedStringsXml);
   put(PART_PATH.theme, renderTheme());
-  for (const [file, xml] of worksheetXml) put(`xl/worksheets/${file}`, xml);
+  for (const [file, { xml, rels }] of worksheetXml) {
+    put(`xl/worksheets/${file}`, xml);
+    // The worksheet `.rels` file is covered by the existing `<Default Extension="rels" …>` in
+    // [Content_Types].xml, so no content-types change is needed.
+    if (rels !== undefined) put(`xl/worksheets/_rels/${file}.rels`, rels);
+  }
 
   return writeZipArchive(entries);
 }

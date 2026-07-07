@@ -97,6 +97,24 @@ describe("writeWorkbookBuffer — worksheet grid", () => {
   });
 });
 
+describe("writeWorkbookBuffer — hyperlinks wiring", () => {
+  it("writes xl/worksheets/_rels/<file>.rels only for sheets that have hyperlinks", () => {
+    const wb = new Workbook();
+    const ws = wb.addWorksheet("Links");
+    ws.getCell("A1").value = { text: "Anthropic", hyperlink: "https://anthropic.com" };
+    wb.addWorksheet("Plain").getCell("A1").value = "no links here";
+
+    const entries = readZipArchive(writeWorkbookBuffer(wb));
+    expect(entries.has("xl/worksheets/_rels/sheet1.xml.rels")).toBe(true);
+    expect(entries.has("xl/worksheets/_rels/sheet2.xml.rels")).toBe(false);
+
+    const rels = part(entries, "xl/worksheets/_rels/sheet1.xml.rels");
+    expect(rels).toContain('Target="https://anthropic.com" TargetMode="External"');
+    const sheet1 = part(entries, "xl/worksheets/sheet1.xml");
+    expect(sheet1).toContain('<hyperlink ref="A1" r:id="rId1"/>');
+  });
+});
+
 describe("writeWorkbookBuffer — exceljs round-trip", () => {
   it("re-opens in exceljs with values, merge and number format intact", async (ctx) => {
     // Variable specifier: not statically resolved, so the suite still typechecks/runs when the
