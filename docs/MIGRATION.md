@@ -28,7 +28,7 @@ main [`README.md`](../README.md#migrating-from-exceljs) instead — that's a dee
 `worksheets`, an object-shaped `inheritFrom` instead of the `'i'|'o'|'i+'|'o+'` DSL, etc.) with more
 freedom to diverge, since it doesn't have to stay drop-in compatible.
 
-## Five behavioural notes — read these before porting
+## Seven behavioural notes — read these before porting
 
 **D1 — `cell.type` / `cell.effectiveType` report ExcelJS's numbers, not `@alosha/xlsx`'s own.**
 `@alosha/xlsx`'s core `CellType` enum shares names with ExcelJS's `ValueType` but **not** the same
@@ -118,6 +118,24 @@ streaming writer's doc-metadata surface, unlike the buffered `Workbook`); `addWo
 and `headerFooter` (printing config, unimplemented for streaming) and a per-sheet `useSharedStrings`
 override (only a workbook-wide setting exists). `stream.xlsx.WorkbookReader` has no streaming
 counterpart yet and still throws unconditionally.
+
+**D7 — `spliceColumns` insert arrays are 1-based in the core, 0-based through compat; splice re-anchors
+comments/validations/conditional formatting but not images/autoFilter.** `@alosha/xlsx`'s core
+`worksheet.spliceColumns(start, count, ...inserts)` reads each insert array **1-based** — `inserts[k][n]`
+fills row `n`, index `0` unused — consistent with `Column.values` and every other 1-based array in the
+core API. Real ExcelJS's `spliceColumns` instead reads them **0-based** (`inserts[k][i]` fills row
+`i + 1`), so ported ExcelJS code would silently land data one row too high against the raw core. The
+compat facade bridges this: through a `@alosha/xlsx/compat` workbook, `spliceColumns` accepts ExcelJS's
+0-based insert arrays unchanged, so migrated code keeps working — only the plain `@alosha/xlsx` API uses
+the 1-based convention. (`spliceRows` inserts are 0-based in both — its `inserts[i]` is a whole row, the
+same as ExcelJS — so it needs no bridge.) Separately, both splice methods now **re-anchor** the
+ref-keyed annotations that don't live on cells — comment refs, data-validation `sqref`s, and
+conditional-formatting `ref`s — with the same rules the merge re-anchoring uses: an annotation entirely
+past the removed region shifts, one entirely before it is untouched, and one straddling the removed
+region is dropped. **Images and `autoFilter` are deliberately left at their original addresses** on a
+splice — real ExcelJS doesn't move them either (its `spliceRows`/`spliceColumns` only re-merge cells and
+update defined names), so matching that keeps behaviour predictable for anyone porting ExcelJS code. If
+you splice around an image or filter range, re-place or reset it yourself afterwards.
 
 ## Supported / deferred matrix
 

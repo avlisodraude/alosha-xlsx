@@ -385,6 +385,47 @@ describe("compat parity — frozen pane + auto-filter", () => {
   });
 });
 
+// --- spliceColumns 0-based insert convention (MIGRATION.md D7) -----------------------------------
+//
+// Real exceljs's spliceColumns reads insert arrays 0-based (insert[i] fills row i+1); the compat
+// facade bridges the core's 1-based convention so ported code lands on the same rows. Same
+// two-engine build-then-diff shape as the corpus above, diffed on the cells the insert touches.
+
+describe("compat parity — spliceColumns 0-based inserts", () => {
+  it("places inserted-column values on the same rows as real exceljs", async (ctx) => {
+    const RealExcelJS = await loadRealExceljs();
+    if (!RealExcelJS) {
+      ctx.skip();
+      return;
+    }
+    const CompatExcelJS = await loadCompatExceljs();
+
+    const build: Build = (wb) => {
+      const ws = wb.addWorksheet("Sheet1");
+      ws.getCell("A1").value = "a1";
+      ws.getCell("A2").value = "a2";
+      // 0-based inserts (ExcelJS convention): ins1 -> row 1, ins2 -> row 2 of the new column A.
+      ws.spliceColumns(1, 0, ["ins1", "ins2"]);
+    };
+
+    const real = new RealExcelJS.Workbook();
+    build(real);
+    const bufReal = (await real.xlsx.writeBuffer()) as Uint8Array;
+
+    const compat = new CompatExcelJS.Workbook();
+    build(compat);
+    const bufCompat = (await compat.xlsx.writeBuffer()) as Uint8Array;
+
+    const loadedReal = new RealExcelJS.Workbook();
+    await loadedReal.xlsx.load(Buffer.from(bufReal));
+    const loadedCompat = new RealExcelJS.Workbook();
+    await loadedCompat.xlsx.load(Buffer.from(bufCompat));
+
+    const cells = { Sheet1: ["A1", "A2", "B1", "B2"] };
+    expect(snapshot(loadedCompat, cells)).toEqual(snapshot(loadedReal, cells));
+  });
+});
+
 // --- conditional formatting (CONDITIONAL-FORMATTING-SPEC.md §4) ----------------------------------
 //
 // Sheet-level like views/autoFilter, so it sits outside the cell-sampling corpus too. A cellIs
