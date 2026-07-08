@@ -28,6 +28,7 @@ export interface NodeWritableLike {
   write(chunk: Uint8Array): boolean;
   end(cb?: () => void): void;
   once(event: string, listener: (arg?: unknown) => void): void;
+  removeListener(event: string, listener: (arg?: unknown) => void): void;
   destroy(error?: Error): void;
 }
 
@@ -42,9 +43,12 @@ export class QueueSink implements ByteSink, AsyncIterable<Uint8Array> {
   };
   private done = false;
   private failure?: unknown;
+  /** Resolvers waiting on {@link whenDrained}; settled once the buffer empties (or the stream ends). */
+  private drainWaiters: Array<() => void> = [];
 
   write(chunk: Uint8Array): void {
     if (this.pending) {
+      // Handed straight to a waiting consumer — never enters the queue, so the buffer stays empty.
       const p = this.pending;
       this.pending = undefined;
       p.resolve({ value: chunk, done: false });
@@ -55,6 +59,7 @@ export class QueueSink implements ByteSink, AsyncIterable<Uint8Array> {
 
   close(): void {
     this.done = true;
+    this.settleDrainWaiters();
     if (this.pending) {
       const p = this.pending;
       this.pending = undefined;
@@ -64,6 +69,7 @@ export class QueueSink implements ByteSink, AsyncIterable<Uint8Array> {
 
   abort(error: unknown): void {
     this.failure = error;
+    this.settleDrainWaiters();
     if (this.pending) {
       const p = this.pending;
       this.pending = undefined;
@@ -71,11 +77,32 @@ export class QueueSink implements ByteSink, AsyncIterable<Uint8Array> {
     }
   }
 
+  /** Resolve once the buffered queue has drained to the consumer (or the stream has ended/failed).
+   *  The writer's `flush()` awaits this so a caller can yield the event loop mid-write and let a
+   *  background pump empty the queue, keeping peak memory flat instead of buffering the whole archive. */
+  whenDrained(): Promise<void> {
+    if (this.queue.length === 0 || this.done || this.failure !== undefined) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      this.drainWaiters.push(resolve);
+    });
+  }
+
+  private settleDrainWaiters(): void {
+    if (this.drainWaiters.length === 0) return;
+    const waiters = this.drainWaiters;
+    this.drainWaiters = [];
+    for (const resolve of waiters) resolve();
+  }
+
   [Symbol.asyncIterator](): AsyncIterator<Uint8Array> {
     return {
       next: (): Promise<IteratorResult<Uint8Array>> => {
         if (this.queue.length > 0) {
-          return Promise.resolve({ value: this.queue.shift() as Uint8Array, done: false });
+          const chunk = this.queue.shift() as Uint8Array;
+          if (this.queue.length === 0) this.settleDrainWaiters();
+          return Promise.resolve({ value: chunk, done: false });
         }
         if (this.failure !== undefined) return Promise.reject(this.failure);
         if (this.done) return Promise.resolve({ value: undefined, done: true });
@@ -95,15 +122,34 @@ export async function drainToWritable(
 ): Promise<void> {
   for await (const chunk of source) {
     if (!writable.write(chunk)) {
+      // Await "drain", removing BOTH listeners on either outcome. A backpressured write that resolves
+      // via "drain" must not leave its "error" listener attached, or they accumulate one per chunk and
+      // trip Node's MaxListenersExceededWarning on a long, frequently-draining write.
       await new Promise<void>((resolve, reject) => {
-        writable.once("drain", () => resolve());
-        writable.once("error", (e) => reject(e));
+        const onDrain = (): void => {
+          cleanup();
+          resolve();
+        };
+        const onError = (e?: unknown): void => {
+          cleanup();
+          reject(e);
+        };
+        const cleanup = (): void => {
+          writable.removeListener("drain", onDrain);
+          writable.removeListener("error", onError);
+        };
+        writable.once("drain", onDrain);
+        writable.once("error", onError);
       });
     }
   }
   await new Promise<void>((resolve, reject) => {
-    writable.once("error", (e) => reject(e));
-    writable.end(() => resolve());
+    const onError = (e?: unknown): void => reject(e);
+    writable.once("error", onError);
+    writable.end(() => {
+      writable.removeListener("error", onError);
+      resolve();
+    });
   });
 }
 

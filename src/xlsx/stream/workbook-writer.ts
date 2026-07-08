@@ -194,6 +194,23 @@ export class WorksheetWriter {
     if (xml.length > 0) this.workbook.pushSheetChunk(xml);
   }
 
+  /** Add and commit every row from `rows`, awaiting {@link WorkbookWriter.flush} every `flushEvery`
+   *  rows (default 10,000) so a huge sheet streams to a `filename`/`stream` destination with flat
+   *  memory instead of buffering the whole compressed archive. Accepts sync or async iterables, so a
+   *  DB cursor or generator can feed it directly. For per-row control (setting styles/notes before
+   *  commit) use {@link addRow} and periodic {@link WorkbookWriter.flush} instead. */
+  async writeRows(
+    rows: Iterable<RowValues> | AsyncIterable<RowValues>,
+    opts?: { flushEvery?: number },
+  ): Promise<void> {
+    const flushEvery = Math.max(1, opts?.flushEvery ?? 10_000);
+    let n = 0;
+    for await (const data of rows) {
+      this.addRow(data).commit();
+      if (++n % flushEvery === 0) await this.workbook.flush();
+    }
+  }
+
   /** Emit the sheet prologue and open its zip entry, exactly once. */
   private ensureStarted(): void {
     if (this.started) return;
@@ -407,6 +424,17 @@ export class WorkbookWriter implements AsyncIterable<Uint8Array> {
 
     this.zip.end();
     if (this.drain) await this.drain;
+  }
+
+  /** Await the background pump catching up: resolves once every chunk produced so far has been handed
+   *  to the `filename`/`stream` destination. A fully synchronous `addRow().commit()` loop never yields
+   *  the event loop, so without this the whole compressed archive accumulates in the sink's buffer
+   *  until {@link commit}. Call it periodically in a large write loop — or use
+   *  {@link WorksheetWriter.writeRows} — to keep peak memory flat. A no-op when the writer is consumed
+   *  as an `AsyncIterable` (the consumer drives draining) or once committed. */
+  async flush(): Promise<void> {
+    if (this.committed || !this.drain) return;
+    await this.sink.whenDrained();
   }
 
   [Symbol.asyncIterator](): AsyncIterator<Uint8Array> {

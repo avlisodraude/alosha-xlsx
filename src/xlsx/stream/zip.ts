@@ -21,8 +21,11 @@ export class StreamingZip {
         sink.abort(err);
         return;
       }
-      // fflate hands back a view over a shared buffer; the sink consumes it synchronously here so no
-      // copy is needed, but `final` is what closes the archive (not an individual entry's last chunk).
+      // The sink may retain this chunk (QueueSink buffers it until a consumer/pump pulls it), so we
+      // rely on fflate handing back a fresh buffer per `ondata` call rather than reusing one — pinned
+      // by a regression test (tests/xlsx/stream/fflate-buffer.test.ts). If a future fflate reuses its
+      // output buffer, copy here (`data.slice()`) before handing it off. `final` closes the whole
+      // archive (not an individual entry's last chunk).
       if (data.length > 0) sink.write(data);
       if (final) sink.close();
     });
