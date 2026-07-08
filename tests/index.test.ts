@@ -1,9 +1,15 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { Cell, Column, Range, Row, version, Workbook, Worksheet } from "../src/index.js";
 
 describe("@alosha/xlsx", () => {
-  it("exposes a version string", () => {
-    expect(version).toBe("0.0.0");
+  it("exposes the real package.json version (injected at build time)", () => {
+    const pkg = JSON.parse(
+      readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
+    ) as { version: string };
+    expect(version).toBe(pkg.version);
+    expect(version).not.toBe("0.0.0");
   });
 
   it("re-exports the core model and address surface from the barrel", () => {

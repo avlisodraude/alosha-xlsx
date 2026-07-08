@@ -256,4 +256,32 @@ describe("Cell", () => {
       expect(cell.model).toEqual({ address: "A1", type: CellType.Null });
     });
   });
+
+  describe("note / dataValidation clearing", () => {
+    it("assigning undefined to note removes the comment", () => {
+      const cell = host.getRow(1).getCell(1);
+      cell.note = { texts: "hi" };
+      expect(cell.note).toEqual({ texts: "hi" });
+      cell.note = undefined;
+      expect(cell.note).toBeUndefined();
+      expect(host.comments.size).toBe(0);
+    });
+
+    it("assigning undefined to dataValidation removes the validation", () => {
+      const cell = host.getRow(1).getCell(1);
+      cell.dataValidation = { type: "whole", formulae: [1] };
+      expect(cell.dataValidation).toEqual({ type: "whole", formulae: [1] });
+      cell.dataValidation = undefined;
+      expect(cell.dataValidation).toBeUndefined();
+      expect(host.dataValidations.size).toBe(0);
+    });
+
+    it("clearing an absent note or validation is a no-op", () => {
+      const cell = host.getRow(1).getCell(1);
+      expect(() => {
+        cell.note = undefined;
+        cell.dataValidation = undefined;
+      }).not.toThrow();
+    });
+  });
 });

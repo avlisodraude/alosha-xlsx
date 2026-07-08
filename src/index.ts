@@ -87,5 +87,10 @@ Object.defineProperty(Workbook.prototype, "xlsx", {
   },
 });
 
-/** The semantic version of the library. */
-export const version = "0.0.0";
+// Replaced at build time by tsup's `define` (and by vitest's `define` under test) with the real
+// package.json version. `typeof` guards against a ReferenceError in any context where neither define
+// ran, falling back to the sentinel.
+declare const __PKG_VERSION__: string;
+
+/** The semantic version of the library, injected from `package.json` at build time. */
+export const version: string = typeof __PKG_VERSION__ === "undefined" ? "0.0.0" : __PKG_VERSION__;
