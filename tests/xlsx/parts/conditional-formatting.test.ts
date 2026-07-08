@@ -116,6 +116,25 @@ describe("worksheet writer — conditional formatting", () => {
     expect(ends).toContain('<formula>RIGHT(A1,LEN("Z"))="Z"</formula>');
   });
 
+  it("escapes embedded quotes and commas in text-rule formulae without corrupting the formula", () => {
+    const quote = render((ws) => {
+      ws.addConditionalFormatting({
+        ref: "A1:A5",
+        rules: [{ type: "containsText", text: 'say "hi"', priority: 1 }],
+      });
+    }).xml;
+    expect(quote).toContain('<formula>NOT(ISERROR(SEARCH("say ""hi""",A1)))</formula>');
+    expect(quote).toContain('text="say &quot;hi&quot;"');
+
+    const comma = render((ws) => {
+      ws.addConditionalFormatting({
+        ref: "A1:A5",
+        rules: [{ type: "beginsWith", text: "a,b", priority: 1 }],
+      });
+    }).xml;
+    expect(comma).toContain('<formula>LEFT(A1,LEN("a,b"))="a,b"</formula>');
+  });
+
   it("top10 emits rank, and percent/bottom only when true (golden)", () => {
     const { xml } = render((ws) => {
       ws.addConditionalFormatting({

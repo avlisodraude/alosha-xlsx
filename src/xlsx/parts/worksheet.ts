@@ -551,15 +551,16 @@ function textRuleFormula(
   text: string,
   anchor: string,
 ): string {
+  const t = text.replace(/"/g, '""');
   switch (type) {
     case "containsText":
-      return `NOT(ISERROR(SEARCH("${text}",${anchor})))`;
+      return `NOT(ISERROR(SEARCH("${t}",${anchor})))`;
     case "notContainsText":
-      return `ISERROR(SEARCH("${text}",${anchor}))`;
+      return `ISERROR(SEARCH("${t}",${anchor}))`;
     case "beginsWith":
-      return `LEFT(${anchor},LEN("${text}"))="${text}"`;
+      return `LEFT(${anchor},LEN("${t}"))="${t}"`;
     case "endsWith":
-      return `RIGHT(${anchor},LEN("${text}"))="${text}"`;
+      return `RIGHT(${anchor},LEN("${t}"))="${t}"`;
   }
 }
 
