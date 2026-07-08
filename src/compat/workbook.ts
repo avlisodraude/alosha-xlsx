@@ -623,7 +623,8 @@ function proxyCell(cell: Cell): Cell {
         return true;
       }
       if (prop === "note") {
-        target.note = toCoreComment(value);
+        // `undefined` clears the note (core `Comments.remove`); anything else is normalized.
+        target.note = value === undefined ? undefined : toCoreComment(value);
         return true;
       }
       return Reflect.set(target, prop, value, target);

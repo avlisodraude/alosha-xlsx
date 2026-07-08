@@ -129,7 +129,12 @@ export class Workbook {
   getWorksheet(idOrName?: number | string): Worksheet | undefined {
     if (idOrName === undefined) return this._sheets[0];
     if (typeof idOrName === "number") return this._byId.get(idOrName);
-    return this._sheets.find((w) => w.name === idOrName);
+    const exact = this._sheets.find((w) => w.name === idOrName);
+    if (exact) return exact;
+    // Fall back to a case-insensitive match so lookups line up with `addWorksheet`'s
+    // case-insensitive duplicate rule (a workbook can't hold "Sheet" and "sheet" at once).
+    const lower = idOrName.toLowerCase();
+    return this._sheets.find((w) => w.name.toLowerCase() === lower);
   }
 
   removeWorksheet(idOrName: number | string): void {

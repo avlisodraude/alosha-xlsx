@@ -21,10 +21,8 @@
   "bugs": "https://github.com/avlisodraude/alosha-xlsx/issues",
   "type": "module",
   "sideEffects": [
-    "./dist/index.js",
-    "./dist/index.cjs",
-    "./dist/compat.js",
-    "./dist/compat.cjs"
+    "./dist/*.js",
+    "./dist/*.cjs"
   ],
   "exports": {
     ".": {

@@ -23,7 +23,7 @@ npm install @alosha/xlsx
 yarn add @alosha/xlsx
 ```
 
-Requires Node.js **>= 20**. The package ships ESM + CJS builds and full type declarations.
+Requires Node.js **>= 22**. The package ships ESM + CJS builds and full type declarations.
 
 ## Write a workbook
 
@@ -169,7 +169,9 @@ behave as you'd expect. Common differences to watch for:
   through, or wrap with `Buffer.from(bytes)` if an API insists on a `Buffer`.
 - **`worksheets` is a dense, 0-based array.** No leading `undefined` / 1-based sparse hole —
   `workbook.worksheets[0]` is the first sheet. Use `getWorksheet(idOrName)` for lookups by id or
-  name.
+  name — name lookups fall back to a case-insensitive match (mirroring the case-insensitive
+  duplicate rule `addWorksheet` enforces), so `getWorksheet("report")` still finds a `"Report"`
+  sheet.
 - **Clearer row inheritance.** Instead of ExcelJS's `'i' | 'o' | 'i+' | 'o+'` DSL, `addRow` /
   `insertRow` take `{ inheritFrom: "above" | "below", includeEmpty?: boolean }`.
 - **ESM-first.** The package is ESM with a CJS fallback; prefer `import` over `require`.
@@ -180,7 +182,7 @@ porting a workbook that leans on charts or streaming reads.
 **Want a one-line import swap instead?** `@alosha/xlsx/compat` is an ExcelJS-shaped drop-in — same
 `cell.type` numbers, same style-setter precedence, same `addRow`/`row.values`/`worksheet.columns`
 behaviour — for code that shouldn't need to change beyond `import ExcelJS from "@alosha/xlsx/compat"`.
-See [`docs/MIGRATION.md`](https://github.com/avlisodraude/alosha-xlsx/blob/main/docs/MIGRATION.md) for the supported/deferred matrix and the five
+See [`docs/MIGRATION.md`](https://github.com/avlisodraude/alosha-xlsx/blob/main/docs/MIGRATION.md) for the supported/deferred matrix and the seven
 behavioural notes to check before porting.
 
 ## Known limitations

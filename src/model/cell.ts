@@ -207,7 +207,11 @@ export class Cell {
     return this.rowRef.worksheet.dataValidations.find(this.address);
   }
 
-  set dataValidation(dv: DataValidation) {
+  set dataValidation(dv: DataValidation | undefined) {
+    if (dv === undefined) {
+      this.rowRef.worksheet.dataValidations.remove(this.address);
+      return;
+    }
     this.rowRef.worksheet.dataValidations.add(this.address, dv);
   }
 
@@ -216,7 +220,11 @@ export class Cell {
     return this.rowRef.worksheet.comments.find(this.address);
   }
 
-  set note(comment: Comment) {
+  set note(comment: Comment | undefined) {
+    if (comment === undefined) {
+      this.rowRef.worksheet.comments.remove(this.address);
+      return;
+    }
     this.rowRef.worksheet.comments.add(this.address, comment);
   }
 

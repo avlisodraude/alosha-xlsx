@@ -52,6 +52,24 @@ describe("Workbook", () => {
       expect(wb.getWorksheet("missing")).toBeUndefined();
       expect(wb.getWorksheet(999)).toBeUndefined();
     });
+
+    it("falls back to a case-insensitive name match (matches the duplicate rule)", () => {
+      const report = wb.addWorksheet("Report");
+      expect(wb.getWorksheet("report")).toBe(report);
+      expect(wb.getWorksheet("REPORT")).toBe(report);
+    });
+
+    it("prefers an exact-case match over a case-insensitive one when both exist", () => {
+      // The two names differ only in case, which addWorksheet forbids — but a workbook loaded from a
+      // foreign file (set model) can carry them, so an exact hit must still win.
+      const lower = wb.addWorksheet("data");
+      wb.model = {
+        ...wb.model,
+        sheets: [lower.model, { ...lower.model, id: 999, name: "DATA", orderNo: 1 }],
+      };
+      expect(wb.getWorksheet("DATA")?.name).toBe("DATA");
+      expect(wb.getWorksheet("data")?.name).toBe("data");
+    });
   });
 
   describe("worksheets ordering", () => {
