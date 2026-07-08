@@ -97,6 +97,20 @@ describe("parseXml", () => {
     ]);
   });
 
+  it("decodes Excel's _xHHHH_ escape token (written by our own xml-writer for XML-illegal chars)", () => {
+    expect(events("<t>a_x000B_b</t>")).toEqual([
+      { kind: "open", name: "t", attrs: {}, selfClosing: false },
+      { kind: "text", text: "a\x0Bb" },
+      { kind: "close", name: "t" },
+    ]);
+  });
+
+  it("decodes the _xHHHH_ escape token inside attribute values", () => {
+    expect(events('<a b="x_x000B_y"/>')).toEqual([
+      { kind: "open", name: "a", attrs: { b: "x\x0By" }, selfClosing: true },
+    ]);
+  });
+
   it("emits CDATA content as literal text (no entity decoding)", () => {
     expect(events("<t><![CDATA[a & b <c>]]></t>")).toEqual([
       { kind: "open", name: "t", attrs: {}, selfClosing: false },

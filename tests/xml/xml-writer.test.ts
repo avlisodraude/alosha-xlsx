@@ -18,6 +18,31 @@ describe("escapeXmlAttr", () => {
   });
 });
 
+describe("escapeXmlText / escapeXmlAttr — XML 1.0 illegal characters", () => {
+  it("re-encodes a control char (vertical tab) as Excel's _xHHHH_ token", () => {
+    expect(escapeXmlText("a\x0Bb")).toBe("a_x000B_b");
+    expect(escapeXmlAttr("a\x0Bb")).toBe("a_x000B_b");
+  });
+
+  it("re-encodes the other illegal control-char ranges", () => {
+    expect(escapeXmlText("\x00\x08\x0C\x0E\x1F")).toBe("_x0000__x0008__x000C__x000E__x001F_");
+  });
+
+  it("re-encodes the U+FFFE/U+FFFF noncharacters", () => {
+    expect(escapeXmlText("a￾b￿c")).toBe("a_xFFFE_b_xFFFF_c");
+  });
+
+  it("re-encodes a lone (unpaired) surrogate but leaves a valid surrogate pair intact", () => {
+    expect(escapeXmlText("a\uD800b")).toBe("a_xD800_b");
+    expect(escapeXmlText("a\uDC00b")).toBe("a_xDC00_b");
+    expect(escapeXmlText("a😀b")).toBe("a😀b"); // 😀, a legal supplementary char
+  });
+
+  it("leaves tab, newline and carriage return untouched", () => {
+    expect(escapeXmlText("a\tb\nc\rd")).toBe("a\tb\nc\rd");
+  });
+});
+
 describe("XmlWriter", () => {
   it("emits the XML declaration by default", () => {
     expect(new XmlWriter().toString()).toBe(
