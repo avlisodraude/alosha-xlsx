@@ -37,6 +37,11 @@ export interface CellModel {
   type: CellType;
   value?: unknown;
   formula?: string;
+  /** For a shared-formula slave cell: the address of the master whose expression it reuses. */
+  sharedFormula?: string;
+  /** The range a shared/array master governs (`A1:A3`); carried through so the writer can re-emit it. */
+  ref?: string;
+  shareType?: "shared" | "array";
   result?: unknown;
   style?: Style;
 }
@@ -221,10 +226,15 @@ export class Cell {
       case CellType.Null:
       case CellType.Merge:
         break;
-      case CellType.Formula:
-        if (this._stored.value.formula !== undefined) m.formula = this._stored.value.formula;
-        if (this._stored.value.result !== undefined) m.result = this._stored.value.result;
+      case CellType.Formula: {
+        const f = this._stored.value;
+        if (f.formula !== undefined) m.formula = f.formula;
+        if (f.sharedFormula !== undefined) m.sharedFormula = f.sharedFormula;
+        if (f.ref !== undefined) m.ref = f.ref;
+        if (f.shareType !== undefined) m.shareType = f.shareType;
+        if (f.result !== undefined) m.result = f.result;
         break;
+      }
       default:
         m.value = fromStored(this._stored);
     }
@@ -240,12 +250,19 @@ export class Cell {
       case CellType.Merge:
         this._stored = { type: CellType.Merge, master: this.address };
         break;
-      case CellType.Formula:
-        this._stored = toStored({
+      case CellType.Formula: {
+        // Keep the `formula` key present (even when undefined) so `detectType` still classifies a
+        // result-only master as a Formula, exactly as the original single-field mapping did.
+        const f: CellFormula = {
           formula: m.formula,
           result: m.result as CellFormula["result"],
-        });
+        };
+        if (m.sharedFormula !== undefined) f.sharedFormula = m.sharedFormula;
+        if (m.ref !== undefined) f.ref = m.ref;
+        if (m.shareType !== undefined) f.shareType = m.shareType;
+        this._stored = toStored(f);
         break;
+      }
       case CellType.Null:
         this._stored = { type: CellType.Null };
         break;

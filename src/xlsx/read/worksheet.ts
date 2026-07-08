@@ -9,7 +9,7 @@
 //                                                             cell's number format is a date/time one.
 // A `<f>` present makes it a formula cell whose cached `<v>` becomes the typed `result`.
 
-import { decodeAddress } from "../../address/index.js";
+import { decodeAddress, encodeAddress } from "../../address/index.js";
 import {
   InvalidCellValueError,
   InvalidConditionalFormattingError,
@@ -17,6 +17,7 @@ import {
 } from "../../errors.js";
 import {
   type CellError,
+  type CellFormula,
   type CellValue,
   type CfAverage,
   type CfCellIs,
@@ -105,7 +106,7 @@ export function parseWorksheet(ws: Worksheet, xml: string, ctx: WorksheetReadCon
         if (!child.selfClosing) parseCols(c, child.name, ws, ctx);
         break;
       case "sheetData":
-        if (!child.selfClosing) parseSheetData(c, child.name, ws, ctx);
+        if (!child.selfClosing) parseSheetData(c, child.name, ws, ctx, new Map());
         break;
       case "autoFilter":
         if (child.attrs.ref !== undefined) ws.autoFilter = child.attrs.ref;
@@ -249,6 +250,7 @@ function parseSheetData(
   container: string,
   ws: Worksheet,
   ctx: WorksheetReadContext,
+  sharedMasters: Map<string, string>,
 ): void {
   let expectedRow = 0;
   c.eachChild(container, (rowEl) => {
@@ -257,7 +259,7 @@ function parseSheetData(
       return;
     }
     expectedRow = num(rowEl.attrs.r) ?? expectedRow + 1;
-    parseRow(c, rowEl, expectedRow, ws, ctx);
+    parseRow(c, rowEl, expectedRow, ws, ctx, sharedMasters);
   });
 }
 
@@ -267,6 +269,7 @@ function parseRow(
   rowNumber: number,
   ws: Worksheet,
   ctx: WorksheetReadContext,
+  sharedMasters: Map<string, string>,
 ): void {
   const row = ws.getRow(rowNumber);
 
@@ -288,8 +291,16 @@ function parseRow(
       if (!cellEl.selfClosing) c.textUntilClose(cellEl.name);
       return;
     }
-    expectedCol = parseCell(c, cellEl, expectedCol + 1, row, ctx);
+    expectedCol = parseCell(c, cellEl, expectedCol + 1, row, ctx, sharedMasters);
   });
+}
+
+/** The `t`/`si`/`ref` attributes on a `<f>` element — what distinguishes a shared/array master from a
+ *  slave. `undefined` when the cell carries no `<f>`. */
+interface FormulaAttrs {
+  shareType?: string;
+  si?: string;
+  ref?: string;
 }
 
 /** Parse one `<c>`; returns the column index it occupied (so a following `<c>` without an `r` can be
@@ -300,6 +311,7 @@ function parseCell(
   fallbackCol: number,
   row: Row,
   ctx: WorksheetReadContext,
+  sharedMasters: Map<string, string>,
 ): number {
   const col = cellEl.attrs.r !== undefined ? decodeAddress(cellEl.attrs.r).col : fallbackCol;
   const styleIdx = num(cellEl.attrs.s) ?? 0;
@@ -308,6 +320,7 @@ function parseCell(
   let vText: string | undefined;
   let inlineValue: string | RichText | undefined;
   let formulaExpr: string | undefined;
+  let formulaAttrs: FormulaAttrs | undefined;
   let hasFormula = false;
 
   if (!cellEl.selfClosing) {
@@ -318,6 +331,7 @@ function parseCell(
           break;
         case "f":
           hasFormula = true;
+          formulaAttrs = { shareType: child.attrs.t, si: child.attrs.si, ref: child.attrs.ref };
           formulaExpr = child.selfClosing ? "" : c.textUntilClose(child.name);
           break;
         case "is":
@@ -329,8 +343,9 @@ function parseCell(
     });
   }
 
+  const address = cellEl.attrs.r ?? encodeAddress(row.number, col);
   const value = hasFormula
-    ? buildFormula(formulaExpr ?? "", t, vText, styleIdx, ctx)
+    ? buildFormula(formulaExpr ?? "", formulaAttrs, t, vText, styleIdx, ctx, sharedMasters, address)
     : decodeValue(t, vText, inlineValue, styleIdx, ctx);
 
   // An empty, unstyled, non-formula cell contributes nothing to the model — skip it.
@@ -372,17 +387,48 @@ function decodeValue(
   }
 }
 
-/** Build a formula cell: the bare `<f>` expression (matching the writer, which stripped the leading
- *  `=`) plus its cached `<v>` decoded into the typed `result`. */
+/** Build a formula cell from its `<f>` (expression + `t`/`si`/`ref` attributes) and cached `<v>`,
+ *  mirroring the writer's forward direction and ExcelJS's `reconcile`:
+ *   - `t="array"`  → an array master: `{ formula, shareType:"array", ref, result }`.
+ *   - `t="shared"` with `ref` → a shared master: recorded by `si` so its slaves can find it, kept as
+ *     `{ formula, shareType:"shared", ref, result }`.
+ *   - `t="shared"` without `ref` → a slave: resolved to its master's address (via `si`) as
+ *     `{ sharedFormula: masterAddress, result }`; the master always precedes it in row-major order.
+ *   - no `t` → a plain formula: `{ formula, result }`.
+ *  The leading `=` was stripped on write, matching `expr`. */
 function buildFormula(
   expr: string,
+  attrs: FormulaAttrs | undefined,
   t: string | undefined,
   vText: string | undefined,
   styleIdx: number,
   ctx: WorksheetReadContext,
+  sharedMasters: Map<string, string>,
+  address: string,
 ): CellValue {
   const result = vText === undefined ? undefined : decodeScalar(t, vText, styleIdx, ctx);
-  return result === undefined ? { formula: expr } : { formula: expr, result };
+  const withResult = (f: CellFormula): CellFormula => (result === undefined ? f : { ...f, result });
+
+  if (attrs?.shareType === "array") {
+    const f: CellFormula = { formula: expr, shareType: "array" };
+    if (attrs.ref !== undefined) f.ref = attrs.ref;
+    return withResult(f);
+  }
+
+  if (attrs?.shareType === "shared") {
+    if (attrs.ref !== undefined) {
+      // Master: register its address under `si` so following slaves resolve to it.
+      if (attrs.si !== undefined) sharedMasters.set(attrs.si, address);
+      return withResult({ formula: expr, shareType: "shared", ref: attrs.ref });
+    }
+    // Slave: point at the master's address rather than duplicating the expression.
+    const master = attrs.si !== undefined ? sharedMasters.get(attrs.si) : undefined;
+    if (master !== undefined) return withResult({ sharedFormula: master });
+    // Master unseen (malformed / out-of-order file): degrade to whatever expression we have.
+    return withResult({ formula: expr });
+  }
+
+  return withResult({ formula: expr });
 }
 
 /** Decode a cached formula `<v>` into the scalar `result` union (no RichText — a rich shared-string
