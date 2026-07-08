@@ -1,5 +1,133 @@
 # Changelog
 
+## 0.12.0
+
+### Minor Changes
+
+- 57b6f96: feat: round-trip shared and array formulas
+
+  The README's feature matrix claimed shared/array formulas round-trip, but they were silently dropped.
+  Three gaps are now closed:
+
+  - `Cell.model` (getter and setter) preserves `sharedFormula`, `ref`, and `shareType` on a
+    `CellFormula`, so the writer actually sees them.
+  - The worksheet writer emits `<f t="shared" …>` / `<f t="array" …>` with the right `si` and `ref`. It
+    plans each sheet up front the way ExcelJS does: one `si` per shared master, each `sharedFormula`
+    slave matched to its master's `si`, and a plain-formula master promoted to a shared group (with a
+    computed bounding `ref`) the first time a slave references it.
+  - The reader parses `<f t= si= ref=>`: it records shared masters by `si` and materializes slaves as
+    `{ sharedFormula: masterAddress, result }` (instead of the previous `{ formula: "" }`, which made us
+    write an empty `<f></f>` that Excel flagged for repair).
+
+  A write→read→write cycle is now stable and Excel/ExcelJS opens the file without repair. The streaming
+  writer, which flushes one row at a time and so has no whole-sheet view, continues to render each
+  formula stand-alone.
+
+- 9a31506: fix: re-anchor comments/validations/conditional formatting on splice, and bridge spliceColumns' 0-based inserts in compat
+
+  `spliceRows`/`spliceColumns` re-anchored cell values and merges but left the ref-keyed annotations —
+  cell comments (`ref`), data validations (`sqref`), and conditional-formatting `ref`s — at their old
+  addresses, so a note on `A5` stayed on `A5` after inserting a row pushed its cell to `A6`. Both splice
+  methods now shift those annotations with the same keep/shift/drop rules the merge re-anchoring already
+  used (a ref entirely past the removed region shifts, one entirely before is kept, one straddling it is
+  dropped — space-separated `sqref`/`ref` parts are handled independently). Images and `autoFilter` are
+  deliberately left in place, matching ExcelJS, which moves neither on a splice (documented in
+  docs/MIGRATION.md D7).
+
+  Separately, `spliceColumns` insert arrays were ambiguous across the core/compat boundary: the core
+  reads them **1-based** (`inserts[k][n]` fills row `n`, consistent with `Column.values`), while real
+  ExcelJS reads them **0-based** (`inserts[k][i]` fills row `i + 1`) — so ported ExcelJS code silently
+  landed inserted-column data one row too high. The core convention is now documented, and the compat
+  facade bridges `spliceColumns` to accept ExcelJS's 0-based arrays, so migrated code keeps working while
+  the plain API stays internally consistent.
+
+### Patch Changes
+
+- c506ec2: fix: escape embedded double quotes in conditional-formatting text-rule formulae
+
+  `containsText`/`notContainsText`/`beginsWith`/`endsWith` conditional-formatting rules generate an
+  Excel `<formula>` that interpolates the rule's `text` into a string literal (e.g.
+  `SEARCH("...",A1)`). A `text` value containing a `"` was interpolated unescaped, producing an
+  invalid formula that made Excel prompt to repair the file on open. Embedded quotes are now doubled
+  (`"` → `""`) per Excel string-literal syntax. The `text=` XML attribute was already escaped
+  correctly and is unaffected.
+
+- cc493ba: fix: guard numeric character reference decoding against RangeError on out-of-range code points
+
+  `decodeEntities` in `src/xml/xml-reader.ts` guarded `&#nn;`/`&#xhh;` numeric character references
+  with `Number.isFinite` before calling `String.fromCodePoint`, but that function throws `RangeError`
+  for code points beyond `0x10FFFF` or lone surrogate halves (`0xD800`-`0xDFFF`) — neither of which
+  `Number.isFinite` rejects. A corrupt or crafted `.xlsx` part (e.g. `&#x110000;` in
+  `sharedStrings.xml`) crashed `readWorkbookBuffer` with an untyped `RangeError`, bypassing the typed
+  error contract in `src/errors.ts`. `decodeEntities` now validates the code point range before
+  converting and falls back to the original match text when it's invalid, the same fallback already
+  used for unknown named entities.
+
+- e62e5f3: fix: preserve per-cell styles inside merged ranges on read
+
+  Reading a workbook destroyed the styles of non-master (slave) cells inside a merged range. Repro:
+  merge `A1:B2`, set a thick bottom border on `B2`, `writeWorkbookBuffer` → `readWorkbookBuffer` →
+  `B2.border` came back `undefined`. Cause: the reader (and `Worksheet` `set model`) applied merges via
+  the public `mergeCells()`, whose `Cell.merge(master)` defaults to copying the master's style over each
+  slave — correct at authoring time, but it clobbered the slave's just-parsed style when re-hydrating a
+  saved workbook. The read / `set model` / merge re-anchoring paths now link slaves with `ignoreStyle`,
+  so each slave keeps its own style; authoring-time `mergeCells()` still propagates the master's style
+  (unchanged ExcelJS-compatible behavior).
+
+- 1b4057b: chore: metadata & packaging cleanup
+
+  A batch of small correctness/packaging fixes with no runtime behaviour change beyond the two API
+  tweaks noted below:
+
+  - **`version` now reports the real package version.** `export const version` was hardcoded to
+    `"0.0.0"`; it's now injected from `package.json` at build time via tsup's `define` (mirrored in the
+    vitest config so it resolves under test too).
+  - **`getWorksheet(name)` falls back to a case-insensitive match.** Exact-case matches still win, but a
+    miss now retries case-insensitively, lining up with `addWorksheet`'s case-insensitive duplicate rule
+    (so `getWorksheet("report")` finds a `"Report"` sheet).
+  - **`cell.note = undefined` and `cell.dataValidation = undefined` now clear** the comment / validation
+    (routing to the store's `remove`), instead of only accepting a value.
+  - **Smaller published package.** Sourcemaps are no longer shipped (emitted only for `pnpm dev` watch
+    builds), dropping the tarball from ~585KB to ~195KB (unpacked ~2.55MB → ~800KB).
+  - **`sideEffects` now covers the hashed ESM chunk** (`./dist/*.js`, `./dist/*.cjs`) that actually holds
+    the `workbook.xlsx` accessor's `Object.defineProperty` side effect, so aggressive tree-shakers can't
+    drop it.
+  - **Docs:** README now states Node.js `>= 22` (matching `engines`) and documents the case-insensitive
+    `getWorksheet` fallback.
+
+- da8eb7a: fix: round-trip sheet view zoom scale
+
+  `renderSheetViews` (`src/xlsx/parts/worksheet.ts`) only emitted `showGridLines` and `<pane>` on the
+  `<sheetView>` element, silently dropping `zoomScale`; `parseSheetViews`
+  (`src/xlsx/read/worksheet.ts`) only read those two back. A view set to `{ zoomScale: 150 }`
+  round-tripped to an empty `views` array, contradicting the README's claim that views (including
+  zoom) round-trip. `renderSheetViews` now emits `zoomScale`/`zoomScaleNormal` (mirrored, since we
+  don't track a separate normal-view zoom) whenever the zoom isn't the default 100, in both the
+  frozen/split and plain branches; `parseSheetViews` reads `zoomScale` back, coercing to a number and
+  dropping it (along with the rest of the view, if otherwise empty) when it's the default 100. The
+  streaming writer's prologue calls the same `renderSheetViews`, so it inherits the fix without
+  changes.
+
+- 47346e7: fix: dedupe repeated workbook media in the streaming writer
+
+  `WorkbookWriter` wrote duplicate ZIP entries when the same workbook-registered image was placed on
+  multiple sheets. Repro: `wb.addImage` once, `addImage` the returned id on two sheets, each
+  `ws.commit()` independently pushes the same `xl/media/imageN.ext` `ExtraPart` — `WorkbookWriter.addExtraPart`
+  wrote it into the archive unconditionally every time, producing two ZIP local-file-headers (and two
+  central-directory records) for one part name, an OPC violation. The buffered writer never had this bug:
+  `collectWorksheetParts` gathers parts into a `Map` keyed by path, so a repeat silently overwrites the
+  same key. `addExtraPart` now tracks written part paths in a `Set` and skips a repeat — its content is
+  identical by construction (same `imageId` resolves to the same registry buffer).
+
+- d27a942: fix: sanitize characters illegal in XML 1.0 when writing cell text and attributes
+
+  `escapeXmlText`/`escapeXmlAttr` only escaped `& < > " '`. Cell text containing control characters
+  (e.g. `\x0B` vertical tab, common when pasting from PDFs), lone surrogate halves, or the
+  U+FFFE/U+FFFF noncharacters was written verbatim into `sharedStrings.xml`/inline strings and
+  attribute values, producing XML that parsers and Excel reject. These characters are now re-encoded
+  using Excel's own `_xHHHH_` convention (rather than stripped), and the reader decodes the same
+  token back, so values round-trip through our own writer/reader intact.
+
 ## 0.11.1
 
 ### Patch Changes
