@@ -9,14 +9,48 @@ const XML_DECLARATION = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 /** Attribute values accepted by {@link XmlWriter}; `undefined` (and `null`) attributes are dropped. */
 type AttrValue = string | number | boolean | undefined | null;
 
-/** Escapes text content: `&`, `<`, `>`. `&` must be replaced first so the others' entities survive. */
+/** Matches, in one pass: the entity chars, every XML 1.0 control char, and lone (unpaired) surrogate
+ *  halves. `\t \n \r` are deliberately excluded — they are legal XML content. */
+const TEXT_ESCAPE_RE =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching XML 1.0's illegal control chars is the point.
+  /[&<>]|[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+/** Same as {@link TEXT_ESCAPE_RE} plus `"` and `'` for attribute values. */
+const ATTR_ESCAPE_RE =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching XML 1.0's illegal control chars is the point.
+  /[&<>"']|[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+/** Replaces one match from {@link TEXT_ESCAPE_RE}/{@link ATTR_ESCAPE_RE}: entity chars get their named
+ *  entity; a char illegal in XML 1.0 is re-encoded as Excel's `_xHHHH_` token (the same convention
+ *  Excel itself uses for e.g. pasted PDF text) so it round-trips through our own reader instead of
+ *  being silently dropped. */
+function escapeMatch(match: string): string {
+  switch (match) {
+    case "&":
+      return "&amp;";
+    case "<":
+      return "&lt;";
+    case ">":
+      return "&gt;";
+    case '"':
+      return "&quot;";
+    case "'":
+      return "&apos;";
+    default:
+      return `_x${match.charCodeAt(0).toString(16).toUpperCase().padStart(4, "0")}_`;
+  }
+}
+
+/** Escapes text content: `&`, `<`, `>`, plus any character illegal in XML 1.0 (control chars, lone
+ *  surrogates, the U+FFFE/U+FFFF noncharacters), which is re-encoded via Excel's `_xHHHH_` convention
+ *  rather than stripped. Single regex pass. */
 export function escapeXmlText(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return s.replace(TEXT_ESCAPE_RE, escapeMatch);
 }
 
 /** Escapes an attribute value: the text set plus `"` and `'` (both may appear inside a quoted attr). */
 export function escapeXmlAttr(s: string): string {
-  return escapeXmlText(s).replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+  return s.replace(ATTR_ESCAPE_RE, escapeMatch);
 }
 
 /** A string needs `xml:space="preserve"` when it has leading or trailing whitespace that Excel would

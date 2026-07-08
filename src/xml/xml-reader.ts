@@ -18,24 +18,33 @@ const NAMED_ENTITIES: Record<string, string> = {
   apos: "'",
 };
 
-const ENTITY_RE = /&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);/g;
+const ENTITY_OR_ESCAPE_RE = /&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);|_x([0-9A-Fa-f]{4})_/g;
 
-/** Decodes the five named XML entities plus numeric `&#nn;`/`&#xhh;` references. Unknown entities are
- *  left untouched (better a literal `&foo;` survive than we silently drop it). */
+/** Decodes the five named XML entities, numeric `&#nn;`/`&#xhh;` references, and Excel's `_xHHHH_`
+ *  escape token (used by our own writer — see xml-writer.ts — to round-trip characters illegal in XML
+ *  1.0). Unknown entities are left untouched (better a literal `&foo;` survive than we silently drop
+ *  it). */
 function decodeEntities(s: string): string {
-  if (!s.includes("&")) return s;
-  return s.replace(ENTITY_RE, (match, ent: string) => {
-    if (ent.startsWith("#x") || ent.startsWith("#X")) {
-      const code = Number.parseInt(ent.slice(2), 16);
-      return Number.isFinite(code) ? String.fromCodePoint(code) : match;
-    }
-    if (ent.startsWith("#")) {
-      const code = Number.parseInt(ent.slice(1), 10);
-      return Number.isFinite(code) ? String.fromCodePoint(code) : match;
-    }
-    const named = NAMED_ENTITIES[ent];
-    return named !== undefined ? named : match;
-  });
+  if (!s.includes("&") && !s.includes("_x")) return s;
+  return s.replace(
+    ENTITY_OR_ESCAPE_RE,
+    (match, ent: string | undefined, hex: string | undefined) => {
+      if (hex !== undefined) {
+        return String.fromCharCode(Number.parseInt(hex, 16));
+      }
+      if (ent === undefined) return match;
+      if (ent.startsWith("#x") || ent.startsWith("#X")) {
+        const code = Number.parseInt(ent.slice(2), 16);
+        return Number.isFinite(code) ? String.fromCodePoint(code) : match;
+      }
+      if (ent.startsWith("#")) {
+        const code = Number.parseInt(ent.slice(1), 10);
+        return Number.isFinite(code) ? String.fromCodePoint(code) : match;
+      }
+      const named = NAMED_ENTITIES[ent];
+      return named !== undefined ? named : match;
+    },
+  );
 }
 
 function isSpace(c: string | undefined): boolean {

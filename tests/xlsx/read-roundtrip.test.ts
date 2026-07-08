@@ -181,6 +181,41 @@ describe("read round-trip — hyperlinks", () => {
   });
 });
 
+describe("read round-trip — XML-illegal characters (control chars from e.g. pasted PDF text)", () => {
+  it("persists a cell value containing a vertical tab as valid, spec-compliant XML and reads it back intact", () => {
+    const wb = new Workbook();
+    const ws = wb.addWorksheet("Illegal");
+    ws.getCell("A1").value = "before\x0Bafter";
+
+    const bytes = writeWorkbookBuffer(wb);
+    const entries = readZipArchive(bytes);
+    const sharedStrings = new TextDecoder().decode(entries.get("xl/sharedStrings.xml"));
+    // The raw control char must never appear literally; it's re-encoded as Excel's _xHHHH_ token.
+    expect(sharedStrings).not.toContain("\x0B");
+    expect(sharedStrings).toContain("_x000B_");
+
+    const back = readWorkbookBuffer(bytes);
+    expect(back.getWorksheet("Illegal")?.getCell("A1").value).toBe("before\x0Bafter");
+  });
+
+  it("persists a control char in an attribute (numFmt formatCode) and reads it back intact", () => {
+    const wb = new Workbook();
+    const ws = wb.addWorksheet("Illegal");
+    const cell = ws.getCell("A1");
+    cell.value = 42;
+    cell.numFmt = '0.00"\x0B"';
+
+    const bytes = writeWorkbookBuffer(wb);
+    const entries = readZipArchive(bytes);
+    const styles = new TextDecoder().decode(entries.get("xl/styles.xml"));
+    expect(styles).not.toContain("\x0B");
+    expect(styles).toContain("_x000B_");
+
+    const back = readWorkbookBuffer(bytes);
+    expect(back.getWorksheet("Illegal")?.getCell("A1").numFmt).toBe('0.00"\x0B"');
+  });
+});
+
 describe("read round-trip — data validations", () => {
   it("persists a list dropdown, a numeric between, and a custom rule and reads them back equal", () => {
     const wb = new Workbook();
