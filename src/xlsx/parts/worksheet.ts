@@ -164,10 +164,15 @@ export function renderSheetViews(
 ): void {
   const view = views[0];
   const showGridLines = showGridLinesProp === false ? false : undefined;
+  // zoomScaleNormal mirrors zoomScale: we don't track a separate "normal view" zoom, so the two are
+  // trivially symmetric whenever a non-default zoom is set.
+  const zoomScale =
+    view?.zoomScale !== undefined && view.zoomScale !== 100 ? view.zoomScale : undefined;
+  const zoomScaleNormal = zoomScale;
 
   w.open("sheetViews");
   if (view && (view.state === "frozen" || view.state === "split")) {
-    w.open("sheetView", { workbookViewId: 0, showGridLines });
+    w.open("sheetView", { workbookViewId: 0, showGridLines, zoomScale, zoomScaleNormal });
     w.leaf("pane", {
       xSplit: view.xSplit,
       ySplit: view.ySplit,
@@ -177,7 +182,7 @@ export function renderSheetViews(
     });
     w.close("sheetView");
   } else {
-    w.leaf("sheetView", { workbookViewId: 0, showGridLines });
+    w.leaf("sheetView", { workbookViewId: 0, showGridLines, zoomScale, zoomScaleNormal });
   }
   w.close("sheetViews");
 }

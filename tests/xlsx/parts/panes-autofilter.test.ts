@@ -67,6 +67,31 @@ describe("worksheet writer — panes", () => {
     });
     expect(xml).toContain('<sheetView workbookViewId="0" showGridLines="0">');
   });
+
+  it("emits zoomScale and zoomScaleNormal on a plain view", () => {
+    const xml = render((ws) => {
+      ws.views = [{ zoomScale: 150 }];
+    });
+    expect(xml).toContain('<sheetView workbookViewId="0" zoomScale="150" zoomScaleNormal="150"/>');
+  });
+
+  it("emits zoomScale on a frozen view alongside its pane", () => {
+    const xml = render((ws) => {
+      ws.views = [{ state: "frozen", ySplit: 1, zoomScale: 75 }];
+    });
+    expect(xml).toContain(
+      '<sheetView workbookViewId="0" zoomScale="75" zoomScaleNormal="75">' +
+        '<pane ySplit="1" state="frozen"/>' +
+        "</sheetView>",
+    );
+  });
+
+  it("omits zoomScale when it is the default 100", () => {
+    const xml = render((ws) => {
+      ws.views = [{ zoomScale: 100 }];
+    });
+    expect(xml).not.toContain("zoomScale");
+  });
 });
 
 describe("worksheet writer — autoFilter", () => {
