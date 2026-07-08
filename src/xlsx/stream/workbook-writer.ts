@@ -282,6 +282,12 @@ export class WorkbookWriter implements AsyncIterable<Uint8Array> {
    *  comments/VML), folded into `[Content_Types].xml` at {@link commit}. */
   private readonly extraDefaults: { extension: string; contentType: string }[] = [];
   private readonly extraOverrides: { partName: string; contentType: string }[] = [];
+  /** Archive paths already written via {@link addExtraPart} — a workbook-registry image placed on
+   *  multiple sheets re-pushes the same `xl/media/imageN.ext` ExtraPart once per placement (each
+   *  sheet's `renderImages` resolves it independently); this catches the repeat before it becomes a
+   *  second ZIP local-file-header for one part name (an OPC violation). The buffered writer gets this
+   *  for free from `collectWorksheetParts`' `Map.set` (last-write-wins on one key). */
+  private readonly writtenPartPaths = new Set<string>();
 
   private readonly rels: SheetRel[] = [];
   private readonly writers: WorksheetWriter[] = [];
@@ -451,8 +457,13 @@ export class WorkbookWriter implements AsyncIterable<Uint8Array> {
 
   /** Write one worksheet child part (drawing/comments XML or raw media) into the archive and record
    *  its content-type Default/Override so `[Content_Types].xml` can declare it. Mirrors the buffered
-   *  writer's `collectWorksheetParts`. Defaults are deduped by extension inside `renderContentTypes`. */
+   *  writer's `collectWorksheetParts`. Defaults are deduped by extension inside `renderContentTypes`.
+   *  A repeat `path` (same registry image placed on a second sheet) is skipped entirely — its content
+   *  is identical by construction (same `imageId` -> same registry buffer), so re-zipping it would only
+   *  duplicate the local-file-header, not change what gets read back. */
   addExtraPart(part: ExtraPart): void {
+    if (this.writtenPartPaths.has(part.path)) return;
+    this.writtenPartPaths.add(part.path);
     if (typeof part.data === "string") this.addPart(part.path, part.data);
     else this.zip.addFile(part.path, part.data);
     if (part.contentType) {

@@ -110,6 +110,75 @@ function modelJson(wb: Workbook): string {
   return JSON.stringify(wb.model, (_k, v) => (v instanceof Date ? v.toISOString() : v), 2);
 }
 
+/** Count ZIP local-file-header entries (signature `PK\x03\x04`) for an exact archive path, scanning
+ *  the raw bytes directly rather than through `unzipSync`/`readZipArchive` — those resolve entries into
+ *  a plain object/Map keyed by path, so a second local header for the same name would silently
+ *  overwrite the first key instead of surfacing as a duplicate. The local-file-header layout (ZIP
+ *  APPNOTE 4.3.7): 4-byte signature, then a fixed 26-byte record up to (and including) the 2-byte
+ *  filename-length field at offset 26, followed immediately by the filename itself. */
+function countLocalFileHeaders(archive: Uint8Array, path: string): number {
+  const target = new TextEncoder().encode(path);
+  const view = new DataView(archive.buffer, archive.byteOffset, archive.byteLength);
+  let count = 0;
+  for (let i = 0; i + 30 <= archive.length; i++) {
+    if (view.getUint32(i, true) !== 0x04034b50) continue; // "PK\x03\x04", little-endian
+    const nameLen = view.getUint16(i + 26, true);
+    if (nameLen !== target.length) continue;
+    const candidate = archive.subarray(i + 30, i + 30 + nameLen);
+    if (candidate.every((b, j) => b === target[j])) count++;
+  }
+  return count;
+}
+
+describe("WorkbookWriter — shared media across sheets", () => {
+  it("writes one workbook-registered image placed on two sheets as a single archive entry", async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+    const wb = new WorkbookWriter();
+    const imageId = wb.addImage({ extension: "png", buffer: png });
+
+    const one = wb.addWorksheet("One");
+    one.addRow(["a"]).commit();
+    one.addImage(imageId, "A1:B2");
+    one.commit();
+
+    const two = wb.addWorksheet("Two");
+    two.addRow(["b"]).commit();
+    two.addImage(imageId, "C3:D4");
+    two.commit();
+
+    await wb.commit();
+    const archive = await collect(wb);
+
+    // unzipSync must succeed on the archive (no structural corruption from the duplicate).
+    const entries = readZipArchive(archive);
+    expect(entries.has("xl/media/image1.png")).toBe(true);
+
+    // The raw bytes carry exactly one local-file-header for the shared media path — a second `addImage`
+    // placement must not re-emit the part.
+    expect(countLocalFileHeaders(archive, "xl/media/image1.png")).toBe(1);
+
+    // Both sheets' drawing parts still reference the one media part.
+    const drawing1Rels = new TextDecoder().decode(
+      entries.get("xl/drawings/_rels/drawing1.xml.rels"),
+    );
+    const drawing2Rels = new TextDecoder().decode(
+      entries.get("xl/drawings/_rels/drawing2.xml.rels"),
+    );
+    expect(drawing1Rels).toContain("../media/image1.png");
+    expect(drawing2Rels).toContain("../media/image1.png");
+
+    // And the model reads back with both placements resolving to the same registered image.
+    const parsed = readWorkbookBuffer(archive);
+    const wsOne = parsed.getWorksheet("One");
+    const wsTwo = parsed.getWorksheet("Two");
+    const idOne = wsOne?.images[0]?.imageId;
+    const idTwo = wsTwo?.images[0]?.imageId;
+    expect(idOne).toBe(idTwo);
+    expect(parsed.getImage(idOne ?? -1)?.extension).toBe("png");
+  });
+});
+
 describe("WorkbookWriter — structural equality with the buffered writer", () => {
   it("streams a multi-sheet, multi-type workbook equal to writeWorkbookBuffer({useSharedStrings:false})", async () => {
     const streamed = await buildStream({ useSharedStrings: false });
