@@ -83,6 +83,27 @@ describe("parseXml", () => {
     ]);
   });
 
+  it("leaves numeric references beyond the Unicode range untouched instead of throwing", () => {
+    expect(events("<t>&#x110000;</t>")).toEqual([
+      { kind: "open", name: "t", attrs: {}, selfClosing: false },
+      { kind: "text", text: "&#x110000;" },
+      { kind: "close", name: "t" },
+    ]);
+  });
+
+  it("leaves numeric references to a lone surrogate half untouched instead of throwing", () => {
+    expect(events("<t>&#xD800;</t>")).toEqual([
+      { kind: "open", name: "t", attrs: {}, selfClosing: false },
+      { kind: "text", text: "&#xD800;" },
+      { kind: "close", name: "t" },
+    ]);
+    expect(events("<t>&#55296;</t>")).toEqual([
+      { kind: "open", name: "t", attrs: {}, selfClosing: false },
+      { kind: "text", text: "&#55296;" },
+      { kind: "close", name: "t" },
+    ]);
+  });
+
   it("decodes entities inside attribute values", () => {
     expect(events('<a b="x &amp; y"/>')).toEqual([
       { kind: "open", name: "a", attrs: { b: "x & y" }, selfClosing: true },

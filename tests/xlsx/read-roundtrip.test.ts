@@ -216,6 +216,27 @@ describe("read round-trip — XML-illegal characters (control chars from e.g. pa
   });
 });
 
+describe("read round-trip — tampered/corrupt sharedStrings part", () => {
+  it("parses a sharedStrings.xml containing an out-of-range numeric character reference without throwing", () => {
+    const wb = new Workbook();
+    const ws = wb.addWorksheet("Tampered");
+    ws.getCell("A1").value = "hello";
+
+    const bytes = writeWorkbookBuffer(wb);
+    const entries = readZipArchive(bytes);
+    const original = new TextDecoder().decode(entries.get("xl/sharedStrings.xml"));
+    // Simulate a corrupt/crafted part: an &#x110000; reference is beyond the Unicode range and would
+    // make String.fromCodePoint throw a RangeError if not guarded.
+    const tampered = original.replace("hello", "hello&#x110000;");
+    entries.set("xl/sharedStrings.xml", new TextEncoder().encode(tampered));
+    const tamperedBytes = writeZipArchive(entries);
+
+    expect(() => readWorkbookBuffer(tamperedBytes)).not.toThrow();
+    const back = readWorkbookBuffer(tamperedBytes);
+    expect(back.getWorksheet("Tampered")?.getCell("A1").value).toBe("hello&#x110000;");
+  });
+});
+
 describe("read round-trip — per-cell style inside a merged range", () => {
   it("preserves a border set on a non-master (slave) cell of a merge across write->read", () => {
     const wb = new Workbook();
