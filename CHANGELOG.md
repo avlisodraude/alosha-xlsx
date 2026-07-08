@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.13.0
+
+### Minor Changes
+
+- cd148c6: Streaming writer: add `flush()` and `writeRows()` for flat-memory large exports, and fix a drain
+  listener leak.
+
+  A fully synchronous `addRow().commit()` loop never yields the event loop, so with a `filename`/`stream`
+  destination the whole compressed archive accumulated in the sink's buffer until `commit()`. Two
+  additions give callers an await point that lets the background pump drain mid-write:
+
+  - `await workbookWriter.flush()` — resolves once every chunk produced so far has reached the
+    destination. Call it periodically in a large write loop. No-op on the async-iterable path (the
+    consumer drives draining) or once committed.
+  - `await worksheetWriter.writeRows(rows, { flushEvery })` — adds and commits every row from a sync or
+    async iterable, flushing every `flushEvery` rows (default 10,000). On a 400k-row poorly-compressible
+    export, peak RSS dropped ~23% versus the un-flushed loop.
+
+  Also fixes a latent listener leak in the internal `Writable` drain pump (a per-backpressure `"error"`
+  listener was never removed, tripping Node's `MaxListenersExceededWarning` on long writes), and pins
+  fflate's per-chunk fresh-buffer behavior with a regression test — the streaming zip hands retained
+  chunks to the sink without copying, which is only safe as long as fflate does not reuse its output
+  buffer. No output change.
+
+### Patch Changes
+
+- 998d0da: Bound the address-decode memo so reading large or many workbooks no longer leaks memory.
+
+  `decodeAddress`'s cache is keyed by full cell address, so distinct cells (up to 16,384 × 1,048,576)
+  grew a process-global `Map` without limit — reading big or numerous workbooks interned every address
+  forever. It is now capped with FIFO eviction (`DECODE_ADDRESS_CACHE_MAX`), keeping the hot-path
+  memoization for realistic working sets while bounding memory. The column-letter/number caches are
+  unchanged (already bounded by Excel's 16,384-column cap). No public API or output change.
+
+- 8c3f8d8: Two correctness fixes:
+
+  - **Reader no longer aliases rich text across cells.** A `t="s"` cell resolved its value to the shared
+    RichText object by reference, so multiple cells pointing at the same rich shared string shared one
+    mutable object — editing one cell's runs silently mutated the others (and the shared-strings pool).
+    Rich-text values are now cloned per cell on read.
+
+  - **Distinct custom dxf number-formats get distinct ids.** Every custom number-format code in a
+    conditional-formatting differential style (`<dxf>`) was written with `numFmtId="164"`, so two rules
+    with different custom formats collided on one id. Each distinct custom code now gets its own id
+    (164, 165, …); built-in codes keep their reserved ids. The dxf `formatCode` (which our reader inverts
+    by) is unchanged, so this is transparent to round-trips but no longer confuses stricter consumers.
+
+- a04246e: Buffered writer: render worksheet rows lazily instead of snapshotting the whole sheet.
+
+  `renderWorksheet` previously read `ws.model`, whose getter deep-snapshots every cell into a
+  `WorksheetModel` before serializing — a full redundant copy of the sheet held alongside the live
+  model and the growing output. It now reads `ws.sheetMeta` (sheet-level model without rows) and pulls
+  rows one at a time through a lazy `ws.rowModelsInOrder()` generator, so only the current row's cells
+  are materialized during serialization. Output is byte-identical; `ws.model` / `workbook.model` are
+  unchanged. Peak memory on large buffered exports drops (~6% at 500k rows × 5 cols) and the write is
+  modestly faster.
+
 ## 0.12.0
 
 ### Minor Changes
