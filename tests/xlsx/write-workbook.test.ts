@@ -115,7 +115,82 @@ describe("writeWorkbookBuffer — hyperlinks wiring", () => {
   });
 });
 
+describe("writeWorkbookBuffer — shared & array formulas", () => {
+  it("promotes a plain-formula master + sharedFormula slaves into an si-numbered shared group", () => {
+    const wb = new Workbook();
+    const ws = wb.addWorksheet("Calc");
+    ws.getCell("A1").value = 10;
+    ws.getCell("A2").value = 20;
+    ws.getCell("A3").value = 30;
+    ws.getCell("B1").value = { formula: "A1*2", result: 20 };
+    ws.getCell("B2").value = { sharedFormula: "B1", result: 40 };
+    ws.getCell("B3").value = { sharedFormula: "B1", result: 60 };
+
+    const sheet1 = part(readZipArchive(writeWorkbookBuffer(wb)), "xl/worksheets/sheet1.xml");
+    // The master carries the expression, the group's bounding ref, and the shared index.
+    expect(sheet1).toContain('<f t="shared" ref="B1:B3" si="0">A1*2</f>');
+    // Slaves carry only the shared index — the expression is not duplicated.
+    expect(sheet1).toContain('<c r="B2"><f t="shared" si="0"/><v>40</v></c>');
+    expect(sheet1).toContain('<c r="B3"><f t="shared" si="0"/><v>60</v></c>');
+  });
+
+  it('emits an array formula as t="array" with its ref', () => {
+    const wb = new Workbook();
+    const ws = wb.addWorksheet("Arr");
+    ws.getCell("C1").value = {
+      formula: "SUM(A1:A3*B1:B3)",
+      shareType: "array",
+      ref: "C1:C1",
+      result: 100,
+    };
+
+    const sheet1 = part(readZipArchive(writeWorkbookBuffer(wb)), "xl/worksheets/sheet1.xml");
+    expect(sheet1).toContain('<f t="array" ref="C1:C1">SUM(A1:A3*B1:B3)</f>');
+    expect(sheet1).toContain("<v>100</v>");
+  });
+});
+
 describe("writeWorkbookBuffer — exceljs round-trip", () => {
+  it("re-opens a shared + array formula group in exceljs with cached results intact", async (ctx) => {
+    const spec = "exceljs";
+    let ExcelJS: { Workbook: new () => unknown } | undefined;
+    try {
+      const mod = (await import(spec)) as { default?: unknown } & Record<string, unknown>;
+      ExcelJS = (mod.default ?? mod) as { Workbook: new () => unknown };
+    } catch {
+      ctx.skip();
+      return;
+    }
+
+    const wb = new Workbook();
+    const ws = wb.addWorksheet("Calc");
+    ws.getCell("A1").value = 10;
+    ws.getCell("A2").value = 20;
+    ws.getCell("A3").value = 30;
+    ws.getCell("B1").value = { formula: "A1*2", result: 20 };
+    ws.getCell("B2").value = { sharedFormula: "B1", result: 40 };
+    ws.getCell("B3").value = { sharedFormula: "B1", result: 60 };
+    ws.getCell("C1").value = {
+      formula: "SUM(A1:A3)",
+      shareType: "array",
+      ref: "C1:C1",
+      result: 60,
+    };
+
+    // biome-ignore lint/suspicious/noExplicitAny: exceljs has no static types available here.
+    const loaded = new (ExcelJS.Workbook as any)();
+    await loaded.xlsx.load(Buffer.from(writeWorkbookBuffer(wb)));
+    const calc = loaded.getWorksheet("Calc");
+
+    // exceljs re-opens the file without repair and resolves every cached result; the master's own
+    // expression survives, and the shared group expands so a slave reports the master's formula too.
+    expect(calc.getCell("B1").result).toBe(20);
+    expect(calc.getCell("B1").formula).toBe("A1*2");
+    expect(calc.getCell("B2").result).toBe(40);
+    expect(calc.getCell("B3").result).toBe(60);
+    expect(calc.getCell("C1").result).toBe(60);
+  });
+
   it("re-opens in exceljs with values, merge and number format intact", async (ctx) => {
     // Variable specifier: not statically resolved, so the suite still typechecks/runs when the
     // optional devDependency is absent (it simply skips).

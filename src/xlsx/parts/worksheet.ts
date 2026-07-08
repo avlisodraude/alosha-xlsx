@@ -9,7 +9,7 @@
 //   hyperlink-> its display text as a string            formula -> <f>expr</f> + typed cached <v>
 //   merge-slave / styled-empty -> empty <c> carrying only its style   null (no style) -> skipped
 
-import { Range } from "../../address/index.js";
+import { decodeEx, Range } from "../../address/index.js";
 import type {
   CellModel,
   CommentModel,
@@ -127,7 +127,11 @@ export function renderWorksheet(ws: Worksheet, ctx: WorksheetContext): RenderedW
 
   const hyperlinks: HyperlinkRecord[] = [];
   renderCols(w, model.columns, ctx);
-  renderSheetData(w, model.rows, ctx, hyperlinks);
+  // Shared/array formula groups need one si per master and a slave→master si match; both require a
+  // whole-sheet view, so plan them up front (buffered path only — the streaming writer, which flushes
+  // one row at a time, has no such view and renders each formula stand-alone).
+  const sharedFormulas = planSharedFormulas(model.rows);
+  renderSheetData(w, model.rows, ctx, hyperlinks, sharedFormulas);
   // CT_Worksheet order: `<autoFilter>` sits after `<sheetData>`, before `<mergeCells>`;
   // `<dataValidations>` after `<mergeCells>`, `<hyperlinks>` after that.
   renderAutoFilter(w, model.autoFilter);
@@ -224,10 +228,11 @@ function renderSheetData(
   rows: Worksheet["model"]["rows"],
   ctx: WorksheetContext,
   hyperlinks: HyperlinkRecord[],
+  sharedFormulas: SharedFormulaPlan,
 ): void {
   w.open("sheetData");
   for (const row of rows) {
-    w.raw(renderRowXml(row, ctx, hyperlinks));
+    w.raw(renderRowXml(row, ctx, hyperlinks, sharedFormulas));
   }
   w.close("sheetData");
 }
@@ -242,12 +247,13 @@ export function renderRowXml(
   row: Worksheet["model"]["rows"][number],
   ctx: WorksheetContext,
   hyperlinks: HyperlinkRecord[],
+  sharedFormulas?: SharedFormulaPlan,
 ): string {
   const styleId = row.style ? ctx.styles.addStyle(row.style) : 0;
 
   let cellsXml = "";
   for (const cell of row.cells) {
-    cellsXml += renderCell(cell, ctx, hyperlinks);
+    cellsXml += renderCell(cell, ctx, hyperlinks, sharedFormulas);
   }
 
   const hasAttrs =
@@ -271,7 +277,12 @@ export function renderRowXml(
 
 /** Render one `<c>` element, or `""` when the cell contributes nothing (a null/merge cell with the
  *  default style). Value interning into the shared-strings/styles pools happens here. */
-function renderCell(cell: CellModel, ctx: WorksheetContext, hyperlinks: HyperlinkRecord[]): string {
+function renderCell(
+  cell: CellModel,
+  ctx: WorksheetContext,
+  hyperlinks: HyperlinkRecord[],
+  sharedFormulas?: SharedFormulaPlan,
+): string {
   const styleId = cell.style ? ctx.styles.addStyle(cell.style) : 0;
   const r = cell.address;
 
@@ -310,7 +321,7 @@ function renderCell(cell: CellModel, ctx: WorksheetContext, hyperlinks: Hyperlin
       return richTextCell(r, styleId, cell.value as RichText, ctx);
 
     case CellType.Formula:
-      return formulaCell(r, styleId, cell, ctx);
+      return formulaCell(r, styleId, cell, ctx, sharedFormulas?.get(r));
 
     default:
       return styleId !== 0 ? leafCell(r, styleId) : "";
@@ -355,7 +366,89 @@ function richTextCell(r: string, s: number, value: RichText, ctx: WorksheetConte
   return stringCell(r, s, text, { ...ctx, useSharedStrings: false });
 }
 
-function formulaCell(r: string, s: number, cell: CellModel, ctx: WorksheetContext): string {
+/** How one formula cell should serialize its `<f>` — its OOXML type, and (for shared/array masters) the
+ *  governed `ref` and shared `si`. Absent from the map means a stand-alone `<f>expr</f>`. */
+interface SharedFormulaRender {
+  t: "shared" | "array";
+  /** Allocated shared index; set on a shared master and every slave that reuses it. */
+  si?: number;
+  /** The range the master governs (`A1:A3`); on a shared master and an array master. */
+  ref?: string;
+  /** A master carries the expression + `ref`; a shared slave carries only `t`+`si` (no expression). */
+  isMaster: boolean;
+}
+type SharedFormulaPlan = Map<string, SharedFormulaRender>;
+
+/** Plan the `<f>` attributes for every formula cell in a sheet, mirroring ExcelJS's `prepare` pass
+ *  (node_modules/exceljs/lib/xlsx/xform/sheet/cell-xform.js): allocate one `si` per shared master and
+ *  match each `sharedFormula` slave to its master's `si`, promoting a plain-formula master to a shared
+ *  group (and computing its bounding `ref`) the first time a slave references it. Masters always precede
+ *  their slaves in row-major order, so a single forward pass resolves every reference. */
+function planSharedFormulas(rows: Worksheet["model"]["rows"]): SharedFormulaPlan {
+  const plan: SharedFormulaPlan = new Map();
+
+  interface MasterState {
+    address: string;
+    /** An explicit `ref` carried in from a foreign read; wins over a computed bounding range. */
+    explicitRef?: string;
+    si?: number;
+    range?: Range;
+  }
+  const masters = new Map<string, MasterState>();
+  let siCounter = 0;
+
+  for (const row of rows) {
+    for (const cell of row.cells) {
+      if (cell.type !== CellType.Formula) continue;
+
+      if (cell.shareType === "array") {
+        plan.set(cell.address, { t: "array", ref: cell.ref, isMaster: true });
+        continue;
+      }
+
+      if (cell.formula !== undefined) {
+        // A master candidate: an explicit shared master (shareType "shared") claims its si now; a
+        // plain formula stays unnumbered until (and unless) a slave references it below.
+        const state: MasterState = { address: cell.address, explicitRef: cell.ref };
+        if (cell.shareType === "shared") state.si = siCounter++;
+        masters.set(cell.address, state);
+        continue;
+      }
+
+      if (cell.sharedFormula !== undefined) {
+        const master = masters.get(cell.sharedFormula);
+        if (!master) continue; // dangling slave — no plan entry; formulaCell emits a bare <f>.
+        if (master.si === undefined) {
+          master.si = siCounter++;
+          master.range = new Range([master.address, cell.address]);
+        } else if (master.range) {
+          const d = decodeEx(cell.address);
+          master.range.expand(d.row, d.col, d.row, d.col);
+        }
+        plan.set(cell.address, { t: "shared", si: master.si, isMaster: false });
+      }
+    }
+  }
+
+  for (const state of masters.values()) {
+    if (state.si === undefined) continue; // a plain, never-shared formula: no <f> attributes.
+    plan.set(state.address, {
+      t: "shared",
+      si: state.si,
+      ref: state.explicitRef ?? state.range?.range,
+      isMaster: true,
+    });
+  }
+  return plan;
+}
+
+function formulaCell(
+  r: string,
+  s: number,
+  cell: CellModel,
+  ctx: WorksheetContext,
+  shared: SharedFormulaRender | undefined,
+): string {
   const expr = (cell.formula ?? "").replace(/^=/, "");
   const result = cell.result;
 
@@ -380,7 +473,16 @@ function formulaCell(r: string, s: number, cell: CellModel, ctx: WorksheetContex
 
   const w = new XmlWriter({ declaration: false });
   w.open("c", { r, s: s !== 0 ? s : undefined, t });
-  w.el("f", expr);
+  if (shared?.t === "array") {
+    w.el("f", expr, { t: "array", ref: shared.ref });
+  } else if (shared?.t === "shared" && !shared.isMaster) {
+    // A shared slave reuses the master's expression: emit `t`+`si` only, no formula text.
+    w.leaf("f", { t: "shared", si: shared.si });
+  } else if (shared?.t === "shared") {
+    w.el("f", expr, { t: "shared", ref: shared.ref, si: shared.si });
+  } else {
+    w.el("f", expr);
+  }
   if (cachedV !== undefined) w.el("v", cachedV);
   w.close("c");
   return w.toString();

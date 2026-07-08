@@ -526,6 +526,73 @@ describe("read round-trip — images", () => {
   });
 });
 
+describe("read round-trip — shared & array formulas (foreign <f t=shared/array> groups)", () => {
+  // A shared-formula group and an array formula exactly as Excel/exceljs emit them: one master `<f>`
+  // carrying the expression + `ref` + `si`, its slaves carrying only `t="shared" si`, plus an array
+  // master. Injected over a real (otherwise empty) package so the whole read path is exercised.
+  const SHEET =
+    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>` +
+    `<row r="1"><c r="A1"><v>1</v></c>` +
+    `<c r="B1"><f t="shared" ref="B1:B3" si="0">A1*2</f><v>2</v></c>` +
+    `<c r="C1"><f t="array" ref="C1:C1">A1+A2</f><v>3</v></c></row>` +
+    `<row r="2"><c r="A2"><v>2</v></c><c r="B2"><f t="shared" si="0"/><v>4</v></c></row>` +
+    `<row r="3"><c r="A3"><v>3</v></c><c r="B3"><f t="shared" si="0"/><v>6</v></c></row>` +
+    `</sheetData></worksheet>`;
+
+  function readInjected(): Workbook {
+    const src = new Workbook();
+    src.addWorksheet("Shared");
+    const entries = readZipArchive(writeWorkbookBuffer(src));
+    entries.set("xl/worksheets/sheet1.xml", new TextEncoder().encode(SHEET));
+    return readWorkbookBuffer(writeZipArchive(entries));
+  }
+
+  it("materializes the master (expression+ref), its slaves (sharedFormula ref), and the array master", () => {
+    const ws = readInjected().getWorksheet("Shared");
+    if (!ws) throw new Error("Shared sheet missing");
+
+    expect(ws.getCell("B1").value).toEqual({
+      formula: "A1*2",
+      shareType: "shared",
+      ref: "B1:B3",
+      result: 2,
+    });
+    expect(ws.getCell("B2").value).toEqual({ sharedFormula: "B1", result: 4 });
+    expect(ws.getCell("B3").value).toEqual({ sharedFormula: "B1", result: 6 });
+    expect(ws.getCell("C1").value).toEqual({
+      formula: "A1+A2",
+      shareType: "array",
+      ref: "C1:C1",
+      result: 3,
+    });
+  });
+
+  it("re-emits si/ref on write and reads back an identical model (write->read is stable)", () => {
+    const bytes = writeWorkbookBuffer(readInjected());
+    const sheet1 = new TextDecoder().decode(readZipArchive(bytes).get("xl/worksheets/sheet1.xml"));
+    expect(sheet1).toContain('<f t="shared" ref="B1:B3" si="0">A1*2</f>');
+    expect(sheet1).toContain('<f t="shared" si="0"/>');
+    expect(sheet1).toContain('<f t="array" ref="C1:C1">A1+A2</f>');
+
+    const ws = readWorkbookBuffer(bytes).getWorksheet("Shared");
+    if (!ws) throw new Error("Shared sheet missing");
+    expect(ws.getCell("B1").value).toEqual({
+      formula: "A1*2",
+      shareType: "shared",
+      ref: "B1:B3",
+      result: 2,
+    });
+    expect(ws.getCell("B2").value).toEqual({ sharedFormula: "B1", result: 4 });
+    expect(ws.getCell("B3").value).toEqual({ sharedFormula: "B1", result: 6 });
+    expect(ws.getCell("C1").value).toEqual({
+      formula: "A1+A2",
+      shareType: "array",
+      ref: "C1:C1",
+      result: 3,
+    });
+  });
+});
+
 describe("read path — typed errors", () => {
   it("throws InvalidPackageError on a truncated/corrupt zip", () => {
     expect(() => readWorkbookBuffer(new Uint8Array([1, 2, 3, 4, 5]))).toThrow(InvalidPackageError);
