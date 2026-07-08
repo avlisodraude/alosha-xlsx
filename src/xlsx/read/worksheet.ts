@@ -371,7 +371,11 @@ function decodeValue(
   switch (t) {
     case "s": {
       if (vText === undefined) return null;
-      return ctx.sharedStrings[Number(vText)] ?? "";
+      const entry = ctx.sharedStrings[Number(vText)];
+      if (entry === undefined) return "";
+      // Clone rich text so cells that reference the same shared-string index don't alias one mutable
+      // RichText object — editing one cell's runs must not silently mutate every other cell's.
+      return typeof entry === "string" ? entry : structuredClone(entry);
     }
     case "inlineStr":
       return inlineValue ?? "";

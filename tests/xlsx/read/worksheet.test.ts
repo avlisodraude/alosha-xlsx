@@ -89,6 +89,28 @@ describe("parseWorksheet — value decoding", () => {
     expect(s.getCell("A1").value).toEqual(rich);
   });
 
+  it("does not alias one RichText object across cells sharing a shared-string index", () => {
+    const rich: RichText = { richText: [{ text: "a", font: { bold: true } }, { text: "b" }] };
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>0</v></c></row></sheetData>`,
+      ),
+      ctx({ sharedStrings: [rich] }),
+    );
+    const a = s.getCell("A1").value as RichText;
+    const b = s.getCell("B1").value as RichText;
+    expect(a).toEqual(rich);
+    expect(b).toEqual(rich);
+    // Distinct objects (and distinct runs), so editing one cell can't mutate the other or the pool.
+    expect(a).not.toBe(b);
+    expect(a.richText[0]).not.toBe(b.richText[0]);
+    (a.richText[0] as { text: string }).text = "MUTATED";
+    expect(b.richText[0]?.text).toBe("a");
+    expect(rich.richText[0]?.text).toBe("a");
+  });
+
   it("decodes an inline string (t=inlineStr)", () => {
     const s = sheet();
     parseWorksheet(

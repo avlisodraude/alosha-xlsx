@@ -124,6 +124,20 @@ describe("number formats", () => {
     expect(xml).toContain('<numFmt numFmtId="165" formatCode="&quot;€&quot;#,##0.00"/>');
   });
 
+  it("gives each distinct custom dxf number-format a distinct id (not all 164)", () => {
+    const styles = createStyles();
+    styles.addDxf({ numFmt: "0.000" });
+    styles.addDxf({ numFmt: "0.000" }); // same code -> same dxf, deduped in the pool
+    styles.addDxf({ numFmt: '"€"#,##0.00' }); // different custom code -> distinct id
+    styles.addDxf({ numFmt: "0.00%" }); // built-in code -> keeps its reserved id
+    const xml = styles.toXml();
+    expect(xml).toContain('<numFmt numFmtId="164" formatCode="0.000"/>');
+    expect(xml).toContain('<numFmt numFmtId="165" formatCode="&quot;€&quot;#,##0.00"/>');
+    expect(xml).toContain('<numFmt numFmtId="10" formatCode="0.00%"/>'); // built-in id preserved
+    // Identical dxfs still dedupe: only one dxf carries formatCode="0.000".
+    expect(xml.match(/formatCode="0\.000"/g)?.length).toBe(1);
+  });
+
   it("renderNumFmt escapes the format code", () => {
     expect(renderNumFmt(164, '0.0"<>"')).toBe(
       '<numFmt numFmtId="164" formatCode="0.0&quot;&lt;&gt;&quot;"/>',

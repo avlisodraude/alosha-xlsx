@@ -127,6 +127,12 @@ class StylesBuilder implements Styles {
   private readonly numFmtXml: string[] = [];
   private nextNumFmtId = FIRST_CUSTOM_NUMFMT_ID;
 
+  /** Custom dxf number-format code → id. A dxf's `<numFmt>` is self-contained (carries its own
+   *  `formatCode`), so this id space is independent of the workbook `<numFmts>` table above — but each
+   *  distinct code still needs a distinct id rather than every custom code collapsing onto 164. */
+  private readonly dxfNumFmtIds = new Map<string, number>();
+  private nextDxfNumFmtId = FIRST_CUSTOM_NUMFMT_ID;
+
   /** Fast path for the common case of one Style object shared across many cells. */
   private readonly cache = new WeakMap<Style, number>();
 
@@ -155,7 +161,19 @@ class StylesBuilder implements Styles {
   }
 
   addDxf(style: Partial<Style> | undefined): number {
-    return this.dxfs.intern(renderDxf(style));
+    return this.dxfs.intern(renderDxf(style, (code) => this.internDxfNumFmtId(code)));
+  }
+
+  /** Allocate (or reuse) a distinct id for a dxf's custom number-format code; built-in codes keep
+   *  their reserved id. Deterministic per code so identical dxfs still dedupe in the intern pool. */
+  private internDxfNumFmtId(code: string): number {
+    const builtin = BUILTIN_NUMFMT_BY_CODE.get(code);
+    if (builtin !== undefined) return builtin;
+    const existing = this.dxfNumFmtIds.get(code);
+    if (existing !== undefined) return existing;
+    const id = this.nextDxfNumFmtId++;
+    this.dxfNumFmtIds.set(code, id);
+    return id;
   }
 
   private internNumFmt(code: string | undefined): number {
@@ -370,10 +388,13 @@ export function renderXf(xf: XfParts): string {
  * `renderFont`/`renderBorder` are reused as-is, but the fill and numFmt need dxf-specific renderers
  * (see {@link renderDxfFill}). An empty style yields a bare `<dxf/>`, which Excel tolerates.
  */
-export function renderDxf(style: Partial<Style> | undefined): string {
+export function renderDxf(
+  style: Partial<Style> | undefined,
+  resolveNumFmtId: (code: string) => number = () => FIRST_CUSTOM_NUMFMT_ID,
+): string {
   const w = new XmlWriter({ declaration: false });
   const font = style?.font ? renderFont(style.font) : "";
-  const numFmt = style?.numFmt !== undefined ? renderDxfNumFmt(style.numFmt) : "";
+  const numFmt = style?.numFmt !== undefined ? renderDxfNumFmt(style.numFmt, resolveNumFmtId) : "";
   const fill = style?.fill ? renderDxfFill(style.fill) : "";
   const alignment = style?.alignment ? renderAlignment(style.alignment) : "";
   const border = style?.border ? renderBorder(style.border) : "";
@@ -402,9 +423,10 @@ export function renderDxf(style: Partial<Style> | undefined): string {
 }
 
 /** A dxf `<numFmt>`: the `formatCode` is what matters (the reader inverts by it); the `numFmtId` reuses
- *  a built-in id when the code is one, else the first custom slot. */
-function renderDxfNumFmt(code: string): string {
-  const id = BUILTIN_NUMFMT_BY_CODE.get(code) ?? FIRST_CUSTOM_NUMFMT_ID;
+ *  a built-in id when the code is one, else a distinct custom id from `resolveNumFmtId` so two dxfs with
+ *  different custom formats don't both claim 164. */
+function renderDxfNumFmt(code: string, resolveNumFmtId: (code: string) => number): string {
+  const id = resolveNumFmtId(code);
   const w = new XmlWriter({ declaration: false });
   w.leaf("numFmt", { numFmtId: id, formatCode: code });
   return w.toString();
