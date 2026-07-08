@@ -1379,6 +1379,42 @@ describe("parseWorksheet — sheetViews / panes", () => {
       ),
     ).toThrow(InvalidPaneError);
   });
+
+  it("parses zoomScale off the sheetView", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(`<sheetViews><sheetView workbookViewId="0" zoomScale="150"/></sheetViews><sheetData/>`),
+      ctx(),
+    );
+    expect(s.views).toEqual([{ zoomScale: 150 }]);
+  });
+
+  it("drops zoomScale=100 (the default) rather than materializing a view", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(`<sheetViews><sheetView workbookViewId="0" zoomScale="100"/></sheetViews><sheetData/>`),
+      ctx(),
+    );
+    expect(s.views).toEqual([]);
+  });
+
+  it("parses zoomScale alongside a frozen pane", () => {
+    const s = sheet();
+    parseWorksheet(
+      s,
+      ws(
+        `<sheetViews><sheetView workbookViewId="0" zoomScale="75">` +
+          `<pane xSplit="1" ySplit="1" topLeftCell="B2" state="frozen"/>` +
+          `</sheetView></sheetViews><sheetData/>`,
+      ),
+      ctx(),
+    );
+    expect(s.views).toEqual([
+      { zoomScale: 75, state: "frozen", xSplit: 1, ySplit: 1, topLeftCell: "B2" },
+    ]);
+  });
 });
 
 // --- <autoFilter> reconstruction (PANES-AUTOFILTER-SPEC §3) -------------------------------------------

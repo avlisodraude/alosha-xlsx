@@ -152,9 +152,10 @@ export function parseWorksheet(ws: Worksheet, xml: string, ctx: WorksheetReadCon
 }
 
 /** Inverse of `renderSheetViews` (src/xlsx/parts/worksheet.ts): reads the sheet's single `<sheetView>`
- *  — `showGridLines="0"` and an optional `<pane>` child — into `views[0]`. A bare `<sheetView
- *  workbookViewId="0"/>` with no `<pane>` and no non-default attrs leaves `views` empty; a foreign file
- *  with more than one `<sheetView>` only keeps the first (our model carries a single view). */
+ *  — `showGridLines="0"`, `zoomScale` (dropped when absent or `100`), and an optional `<pane>` child —
+ *  into `views[0]`. A bare `<sheetView workbookViewId="0"/>` with no `<pane>` and no non-default attrs
+ *  leaves `views` empty; a foreign file with more than one `<sheetView>` only keeps the first (our model
+ *  carries a single view). */
 function parseSheetViews(c: XmlCursor, container: string, ws: Worksheet): void {
   let seenSheetView = false;
   c.eachChild(container, (sheetViewEl) => {
@@ -170,6 +171,8 @@ function parseSheetViews(c: XmlCursor, container: string, ws: Worksheet): void {
 
     const view: WorksheetView = {};
     if (sheetViewEl.attrs.showGridLines === "0") view.showGridLines = false;
+    const zoomScale = num(sheetViewEl.attrs.zoomScale);
+    if (zoomScale !== undefined && zoomScale !== 100) view.zoomScale = zoomScale;
 
     if (!sheetViewEl.selfClosing) {
       c.eachChild(sheetViewEl.name, (child) => {

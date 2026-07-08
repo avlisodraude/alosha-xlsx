@@ -325,6 +325,34 @@ describe("read round-trip — panes & auto-filter", () => {
     expect(data.views).toEqual([{ state: "frozen", xSplit: 1, ySplit: 1, topLeftCell: "B2" }]);
     expect(data.autoFilter).toBe("A1:C1");
   });
+
+  it("persists a zoom-only view", () => {
+    const wb = new Workbook();
+    const ws = wb.addWorksheet("Zoom");
+    ws.getCell("A1").value = "Header";
+    ws.views = [{ zoomScale: 150 }];
+
+    const back = readWorkbookBuffer(writeWorkbookBuffer(wb));
+    const data = back.getWorksheet("Zoom");
+    if (!data) throw new Error("Zoom sheet missing");
+
+    expect(data.views).toEqual([{ zoomScale: 150 }]);
+  });
+
+  it("persists zoom alongside a frozen pane", () => {
+    const wb = new Workbook();
+    const ws = wb.addWorksheet("ZoomPane");
+    ws.getCell("A1").value = "Header";
+    ws.views = [{ state: "frozen", xSplit: 1, ySplit: 1, topLeftCell: "B2", zoomScale: 75 }];
+
+    const back = readWorkbookBuffer(writeWorkbookBuffer(wb));
+    const data = back.getWorksheet("ZoomPane");
+    if (!data) throw new Error("ZoomPane sheet missing");
+
+    expect(data.views).toEqual([
+      { state: "frozen", xSplit: 1, ySplit: 1, topLeftCell: "B2", zoomScale: 75 },
+    ]);
+  });
 });
 
 describe("read round-trip — conditional formatting", () => {
