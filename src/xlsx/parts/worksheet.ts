@@ -107,7 +107,10 @@ export interface HyperlinkRecord {
 const DEFAULT_DATE_NUMFMT = "mm-dd-yy";
 
 export function renderWorksheet(ws: Worksheet, ctx: WorksheetContext): RenderedWorksheet {
-  const model = ws.model;
+  // Sheet-level metadata only — rows are pulled lazily below (ws.rowModelsInOrder) so a large sheet
+  // never has its whole cell set snapshotted into a WorksheetModel at once. That snapshot used to be
+  // the bulk of peak memory on big buffered exports.
+  const model = ws.sheetMeta;
   const w = new XmlWriter();
   w.open("worksheet", { xmlns: NS.spreadsheetml, "xmlns:r": NS.relationships });
 
@@ -130,8 +133,8 @@ export function renderWorksheet(ws: Worksheet, ctx: WorksheetContext): RenderedW
   // Shared/array formula groups need one si per master and a slave→master si match; both require a
   // whole-sheet view, so plan them up front (buffered path only — the streaming writer, which flushes
   // one row at a time, has no such view and renders each formula stand-alone).
-  const sharedFormulas = planSharedFormulas(model.rows);
-  renderSheetData(w, model.rows, ctx, hyperlinks, sharedFormulas);
+  const sharedFormulas = planSharedFormulas(ws.rowModelsInOrder());
+  renderSheetData(w, ws.rowModelsInOrder(), ctx, hyperlinks, sharedFormulas);
   // CT_Worksheet order: `<autoFilter>` sits after `<sheetData>`, before `<mergeCells>`;
   // `<dataValidations>` after `<mergeCells>`, `<hyperlinks>` after that.
   renderAutoFilter(w, model.autoFilter);
@@ -230,7 +233,7 @@ export function renderCols(
 
 function renderSheetData(
   w: XmlWriter,
-  rows: Worksheet["model"]["rows"],
+  rows: Iterable<Worksheet["model"]["rows"][number]>,
   ctx: WorksheetContext,
   hyperlinks: HyperlinkRecord[],
   sharedFormulas: SharedFormulaPlan,
@@ -389,7 +392,7 @@ type SharedFormulaPlan = Map<string, SharedFormulaRender>;
  *  match each `sharedFormula` slave to its master's `si`, promoting a plain-formula master to a shared
  *  group (and computing its bounding `ref`) the first time a slave references it. Masters always precede
  *  their slaves in row-major order, so a single forward pass resolves every reference. */
-function planSharedFormulas(rows: Worksheet["model"]["rows"]): SharedFormulaPlan {
+function planSharedFormulas(rows: Iterable<Worksheet["model"]["rows"][number]>): SharedFormulaPlan {
   const plan: SharedFormulaPlan = new Map();
 
   interface MasterState {

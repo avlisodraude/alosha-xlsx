@@ -730,18 +730,20 @@ export class Worksheet implements WorksheetHost {
 
   // --- model ------------------------------------------------------------------------------------
 
-  get model(): WorksheetModel {
-    const rows = [...this._rows.entries()].sort((a, b) => a[0] - b[0]).map(([, row]) => row.model);
+  /** The sheet-level model *without* the (potentially huge) row array. The buffered writer renders
+   *  rows lazily via {@link rowModelsInOrder}, so it reads this metadata separately instead of
+   *  snapshotting every cell up front — the whole-sheet snapshot was the bulk of peak memory on
+   *  large exports. {@link model} composes this with the materialised rows. */
+  get sheetMeta(): Omit<WorksheetModel, "rows"> {
     const columns = Column.toModel([...this._columns.values()]);
 
-    const m: WorksheetModel = {
+    const m: Omit<WorksheetModel, "rows"> = {
       id: this._id,
       name: this._name,
       orderNo: this.orderNo,
       state: this.state,
       properties: { ...this.properties },
       views: this.views.map((v) => ({ ...v })),
-      rows,
       merges: [...this._merges.values()].map((r) => r.range),
     };
     if (columns) m.columns = columns;
@@ -762,6 +764,20 @@ export class Worksheet implements WorksheetHost {
     }
     if (this.pageSetup !== undefined) m.pageSetup = this.pageSetup;
     if (this.headerFooter !== undefined) m.headerFooter = this.headerFooter;
+    return m;
+  }
+
+  /** Yield each row's model in ascending row-number order, one at a time. Lazy on purpose: a caller
+   *  serialising a large sheet holds only the current row's cells in memory rather than every row's
+   *  cells at once. Sorting builds a light array of row *references*, not deep cell snapshots. */
+  *rowModelsInOrder(): Generator<RowModel> {
+    const entries = [...this._rows.entries()].sort((a, b) => a[0] - b[0]);
+    for (const [, row] of entries) yield row.model;
+  }
+
+  get model(): WorksheetModel {
+    const m = this.sheetMeta as WorksheetModel;
+    m.rows = [...this.rowModelsInOrder()];
     return m;
   }
 
