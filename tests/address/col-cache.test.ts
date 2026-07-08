@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   colLetterToNumber,
   colNumberToLetter,
+  DECODE_ADDRESS_CACHE_MAX,
   decodeAddress,
   decodeEx,
   encodeAddress,
@@ -94,6 +95,19 @@ describe("decodeAddress", () => {
       const address = encodeAddress(row, col);
       expect(decodeAddress(address)).toEqual({ row, col, address });
     }
+  });
+
+  it("caps its memo (FIFO eviction) so bulk decodes don't leak", () => {
+    // Seed one address, then decode more distinct addresses than the cap so the seed is evicted.
+    const seeded = decodeAddress("A1");
+    for (let row = 2; row <= DECODE_ADDRESS_CACHE_MAX + 2; row++) {
+      decodeAddress(`A${row}`);
+    }
+    // Still correct after eviction, but no longer the same cached instance — proof it was dropped
+    // rather than retained forever (an unbounded cache would return the original object).
+    const afterEviction = decodeAddress("A1");
+    expect(afterEviction).toEqual({ row: 1, col: 1, address: "A1" });
+    expect(afterEviction).not.toBe(seeded);
   });
 });
 

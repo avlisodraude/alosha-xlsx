@@ -26,6 +26,14 @@ const ADDRESS_RE = /^([A-Za-z]+)(\d+)$/;
 const SHEET_PREFIX_RE = /^(?:'([^']*)'|([^'!]+))!/;
 const CELL_REF_RE = /^\$?([A-Za-z]+)\$?(\d+)$/;
 
+/** Upper bound on {@link decodeAddress}'s memo. The column caches below are naturally bounded by
+ *  Excel's 16,384-column cap, but this one is keyed by full cell address — distinct cells across
+ *  large or many workbooks (up to 16,384 × 1,048,576) would otherwise grow it without limit, which
+ *  was a real process-global leak. When the cap is reached the oldest entry is evicted (FIFO): a
+ *  bulk read decodes each address once regardless, and realistic repeated-access working sets stay
+ *  well under this bound. */
+export const DECODE_ADDRESS_CACHE_MAX = 100_000;
+
 const colLetterToNumberCache = new Map<string, number>();
 const colNumberToLetterCache = new Map<number, string>();
 const decodeAddressCache = new Map<string, Decoded>();
@@ -94,6 +102,11 @@ export function decodeAddress(address: string): Decoded {
   }
 
   const decoded: Decoded = { row, col, address: `${letters.toUpperCase()}${row}` };
+  if (decodeAddressCache.size >= DECODE_ADDRESS_CACHE_MAX) {
+    // FIFO eviction: a Map iterates keys in insertion order, so the first is the oldest.
+    const oldest = decodeAddressCache.keys().next().value;
+    if (oldest !== undefined) decodeAddressCache.delete(oldest);
+  }
   decodeAddressCache.set(address, decoded);
   return decoded;
 }
