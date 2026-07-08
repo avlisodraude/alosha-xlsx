@@ -20,10 +20,17 @@ const NAMED_ENTITIES: Record<string, string> = {
 
 const ENTITY_OR_ESCAPE_RE = /&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);|_x([0-9A-Fa-f]{4})_/g;
 
+/** `String.fromCodePoint` throws `RangeError` for code points beyond the Unicode range or lone
+ *  surrogate halves — both reachable via a crafted `&#nn;`/`&#xhh;` reference — so callers must
+ *  check this before converting rather than relying on Number.isFinite. */
+function isValidCodePoint(code: number): boolean {
+  return Number.isFinite(code) && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff);
+}
+
 /** Decodes the five named XML entities, numeric `&#nn;`/`&#xhh;` references, and Excel's `_xHHHH_`
  *  escape token (used by our own writer — see xml-writer.ts — to round-trip characters illegal in XML
- *  1.0). Unknown entities are left untouched (better a literal `&foo;` survive than we silently drop
- *  it). */
+ *  1.0). Unknown entities and out-of-range numeric references are left untouched (better a literal
+ *  `&foo;` survive than we silently drop it or throw on a crafted/corrupt part). */
 function decodeEntities(s: string): string {
   if (!s.includes("&") && !s.includes("_x")) return s;
   return s.replace(
@@ -35,11 +42,11 @@ function decodeEntities(s: string): string {
       if (ent === undefined) return match;
       if (ent.startsWith("#x") || ent.startsWith("#X")) {
         const code = Number.parseInt(ent.slice(2), 16);
-        return Number.isFinite(code) ? String.fromCodePoint(code) : match;
+        return isValidCodePoint(code) ? String.fromCodePoint(code) : match;
       }
       if (ent.startsWith("#")) {
         const code = Number.parseInt(ent.slice(1), 10);
-        return Number.isFinite(code) ? String.fromCodePoint(code) : match;
+        return isValidCodePoint(code) ? String.fromCodePoint(code) : match;
       }
       const named = NAMED_ENTITIES[ent];
       return named !== undefined ? named : match;
