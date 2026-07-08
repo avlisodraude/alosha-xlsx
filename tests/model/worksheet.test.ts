@@ -291,6 +291,90 @@ describe("Worksheet", () => {
       expect(ws.getCell("B4").isMerged).toBe(true);
       expect(ws.getCell("B4").master).toBe(ws.getCell("A3"));
     });
+
+    it("shifts a comment, data validation and conditional format below an inserted row", () => {
+      ws.comments.add("A5", { texts: "note" });
+      ws.dataValidations.add("A5:A7", { type: "list", formulae: ['"a,b"'] });
+      ws.addConditionalFormatting({
+        ref: "A5:A7",
+        rules: [{ type: "expression", formulae: ["A5>0"] }],
+      });
+
+      ws.spliceRows(2, 0, ["x"]); // insert one row above -> everything shifts down by 1
+
+      expect(ws.comments.find("A6")).toEqual({ texts: "note" });
+      expect(ws.comments.find("A5")).toBeUndefined();
+      expect(ws.dataValidations.model[0]?.sqref).toBe("A6:A8");
+      expect(ws.conditionalFormattings[0]?.ref).toBe("A6:A8");
+    });
+
+    it("keeps annotations entirely above the removed region untouched", () => {
+      ws.comments.add("A1", { texts: "top" });
+      ws.dataValidations.add("A1", { type: "whole", formulae: [1] });
+      ws.spliceRows(5, 1); // delete row 5, far below the annotations
+      expect(ws.comments.find("A1")).toEqual({ texts: "top" });
+      expect(ws.dataValidations.model[0]?.sqref).toBe("A1");
+    });
+
+    it("drops an annotation straddling the removed rows, mirroring merges", () => {
+      ws.dataValidations.add("A4:A6", { type: "whole", formulae: [1] });
+      ws.comments.add("A5", { texts: "gone" });
+      ws.spliceRows(5, 1); // delete row 5 -> the single-cell comment vanishes, the range is dropped
+      expect(ws.comments.find("A5")).toBeUndefined();
+      expect(ws.dataValidations.size).toBe(0);
+    });
+
+    it("preserves independent parts of a space-separated sqref, dropping only the straddling one", () => {
+      ws.dataValidations.add("A1 A5 A9", { type: "whole", formulae: [1] });
+      ws.spliceRows(5, 1); // delete row 5 -> A1 kept, A5 dropped, A9 shifts to A8
+      expect(ws.dataValidations.model[0]?.sqref).toBe("A1 A8");
+    });
+
+    it("leaves images and autoFilter at their original addresses (ExcelJS parity)", () => {
+      const imageId = wb.addImage({ extension: "png", buffer: new Uint8Array([1, 2, 3]) });
+      ws.addImage(imageId, "B5:D8"); // stored 0-based: tl col1/row4, br col3/row7
+      ws.autoFilter = "A5:C5";
+      ws.spliceRows(1, 0, ["x"]); // insert a row at the top
+      expect(ws.images[0]?.range).toEqual({ tl: { col: 1, row: 4 }, br: { col: 3, row: 7 } });
+      expect(ws.autoFilter).toBe("A5:C5");
+    });
+  });
+
+  describe("spliceColumns", () => {
+    it("uses 1-based insert arrays (colVals[n] fills row n, index 0 unused)", () => {
+      ws.getCell("A1").value = "a1";
+      ws.getCell("A2").value = "a2";
+      // Insert one column at A: index 1 -> row 1, index 2 -> row 2, index 0 (null) ignored.
+      ws.spliceColumns(1, 0, [null, "top", "bottom"]);
+      expect(ws.getCell("A1").value).toBe("top");
+      expect(ws.getCell("A2").value).toBe("bottom");
+      expect(ws.getCell("B1").value).toBe("a1");
+      expect(ws.getCell("B2").value).toBe("a2");
+    });
+
+    it("shifts a comment, data validation and conditional format right of an inserted column", () => {
+      ws.comments.add("C1", { texts: "note" });
+      ws.dataValidations.add("C1:E1", { type: "list", formulae: ['"a,b"'] });
+      ws.addConditionalFormatting({
+        ref: "C1:E1",
+        rules: [{ type: "expression", formulae: ["C1>0"] }],
+      });
+
+      ws.spliceColumns(1, 0, [null]); // insert one column at A -> everything shifts right by 1
+
+      expect(ws.comments.find("D1")).toEqual({ texts: "note" });
+      expect(ws.dataValidations.model[0]?.sqref).toBe("D1:F1");
+      expect(ws.conditionalFormattings[0]?.ref).toBe("D1:F1");
+    });
+
+    it("leaves images and autoFilter in place on a column splice (ExcelJS parity)", () => {
+      const imageId = wb.addImage({ extension: "png", buffer: new Uint8Array([1, 2, 3]) });
+      ws.addImage(imageId, "C1:E4"); // stored 0-based: tl col2/row0, br col4/row3
+      ws.autoFilter = "C1:E1";
+      ws.spliceColumns(1, 0, [null]);
+      expect(ws.images[0]?.range).toEqual({ tl: { col: 2, row: 0 }, br: { col: 4, row: 3 } });
+      expect(ws.autoFilter).toBe("C1:E1");
+    });
   });
 
   describe("insertRow / duplicateRow", () => {

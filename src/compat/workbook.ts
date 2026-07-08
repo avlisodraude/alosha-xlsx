@@ -749,6 +749,20 @@ function proxyWorksheet(worksheet: Worksheet): Worksheet {
           for (const cf of cfs) target.removeConditionalFormatting(cf.ref);
         };
       }
+      // D7 spliceColumns bridge: ExcelJS's insert arrays are 0-based (`insert[i]` fills row `i+1`),
+      // while the core follows the 1-based `Column.values` convention (`colVals[n]` fills row `n`,
+      // index 0 unused). Shift each insert array up one slot so ported ExcelJS code lands on the right
+      // rows. `start`/`count` are plain numbers; cell values are unwrapped like any other model arg.
+      if (prop === "spliceColumns") {
+        return (start: number, count: number, ...inserts: unknown[]) => {
+          const bridged = inserts.map((col) =>
+            Array.isArray(col) ? [null, ...col.map(unwrap)] : col,
+          );
+          return wrap(
+            (target.spliceColumns as (...a: unknown[]) => unknown)(start, count, ...bridged),
+          );
+        };
+      }
       // ExcelJS parity: default `eachRow` skips empty rows (§ MIGRATION "eachRow/eachCell").
       if (prop === "eachRow") {
         return (

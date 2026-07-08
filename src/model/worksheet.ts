@@ -141,6 +141,46 @@ function normalizeMergeArgs(cells: unknown[]): Range {
   throw new InvalidRangeError(cells);
 }
 
+/** Re-anchor a `ref`/`sqref` (a single address, a range, or space-separated ranges) after a splice on
+ *  one axis, using the very rules the merge re-anchoring uses: a part lying entirely after the removed
+ *  region shifts by `delta`; one lying entirely before it is kept; one straddling the removed region is
+ *  dropped (never truncated — a merge dropped there too). Returns the rewritten ref, or `undefined`
+ *  when every part dropped. A malformed fragment is passed through untouched rather than thrown on. */
+function shiftRef(
+  ref: string,
+  axis: "row" | "col",
+  start: number,
+  count: number,
+  delta: number,
+): string | undefined {
+  const kept: string[] = [];
+  for (const part of ref.trim().split(/\s+/)) {
+    if (part === "") continue;
+    let range: Range;
+    try {
+      range = new Range(part);
+    } catch {
+      kept.push(part);
+      continue;
+    }
+    const lo = axis === "row" ? range.top : range.left;
+    const hi = axis === "row" ? range.bottom : range.right;
+    let shifted: Range;
+    if (lo >= start + count) {
+      shifted =
+        axis === "row"
+          ? new Range(range.top + delta, range.left, range.bottom + delta, range.right)
+          : new Range(range.top, range.left + delta, range.bottom, range.right + delta);
+    } else if (hi < start) {
+      shifted = range; // entirely before the removed region — unchanged
+    } else {
+      continue; // straddles the removed region — drop, mirroring merge re-anchoring
+    }
+    kept.push(shifted.count === 1 ? shifted.tl : shifted.range);
+  }
+  return kept.length > 0 ? kept.join(" ") : undefined;
+}
+
 export class Worksheet implements WorksheetHost {
   orderNo: number;
   state: "visible" | "hidden" | "veryHidden" = "visible";
@@ -302,6 +342,39 @@ export class Worksheet implements WorksheetHost {
         this.applyMerge(new Range(m.top, m.left, m.bottom, m.right), true);
       }
     }
+
+    this.reanchorAnnotations("row", start, count, delta);
+  }
+
+  /** Shift the ref-keyed annotations that don't live on cells — comment refs, data-validation sqrefs,
+   *  and conditional-formatting refs — to follow a `spliceRows`/`spliceColumns`, using {@link shiftRef}'s
+   *  keep/shift/drop rules (identical to the merge re-anchoring just above). Images and `autoFilter` are
+   *  intentionally left at their original addresses: ExcelJS does not move them on a splice either, and
+   *  matching that avoids surprising anyone porting ExcelJS code (docs/MIGRATION.md D7). */
+  private reanchorAnnotations(
+    axis: "row" | "col",
+    start: number,
+    count: number,
+    delta: number,
+  ): void {
+    const comments = this._comments.model;
+    this._comments.clear();
+    for (const { ref, ...comment } of comments) {
+      const moved = shiftRef(ref, axis, start, count, delta);
+      if (moved !== undefined) this._comments.add(moved, comment);
+    }
+
+    const validations = this._dataValidations.model;
+    this._dataValidations.clear();
+    for (const { sqref, ...dv } of validations) {
+      const moved = shiftRef(sqref, axis, start, count, delta);
+      if (moved !== undefined) this._dataValidations.add(moved, dv);
+    }
+
+    this._conditionalFormattings = this._conditionalFormattings.flatMap((cf) => {
+      const moved = shiftRef(cf.ref, axis, start, count, delta);
+      return moved === undefined ? [] : [{ ...cf, ref: moved }];
+    });
   }
 
   private snapshotRow(row: Row): RowSnapshot {
@@ -429,6 +502,11 @@ export class Worksheet implements WorksheetHost {
     return cc >= 1 ? this.getColumn(cc) : undefined;
   }
 
+  /** Each `inserts[k]` is a **1-based** column of values (index 0 unused, `colVals[n]` fills row `n`),
+   *  matching {@link Column.values} and every other 1-based array in the core. ExcelJS's own
+   *  `spliceColumns` instead takes 0-based inserts (`insert[i]` fills row `i+1`); the compat facade
+   *  bridges that gap (docs/MIGRATION.md D7), so ported ExcelJS code keeps working while the core stays
+   *  internally consistent. */
   spliceColumns(start: number, count: number, ...inserts: CellValue[][]): void {
     const delta = inserts.length - count;
 
@@ -467,6 +545,8 @@ export class Worksheet implements WorksheetHost {
         this.applyMerge(new Range(m.top, m.left, m.bottom, m.right), true);
       }
     }
+
+    this.reanchorAnnotations("col", start, count, delta);
   }
 
   // --- column keys ------------------------------------------------------------------------------
