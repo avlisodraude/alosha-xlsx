@@ -216,6 +216,26 @@ describe("read round-trip — XML-illegal characters (control chars from e.g. pa
   });
 });
 
+describe("read round-trip — per-cell style inside a merged range", () => {
+  it("preserves a border set on a non-master (slave) cell of a merge across write->read", () => {
+    const wb = new Workbook();
+    const ws = wb.addWorksheet("Merged");
+    ws.getCell("A1").value = "master";
+    ws.mergeCells("A1:B2");
+    // Give the slave B2 its own distinct style (a thick bottom border) after the merge.
+    ws.getCell("B2").border = { bottom: { style: "thick" } };
+
+    const back = readWorkbookBuffer(writeWorkbookBuffer(wb));
+    const data = back.getWorksheet("Merged");
+    if (!data) throw new Error("Merged sheet missing");
+
+    // The slave stays merged AND keeps its own border, rather than inheriting the master's blank style.
+    expect(data.getCell("B2").isMerged).toBe(true);
+    expect(data.getCell("B2").border).toEqual({ bottom: { style: "thick" } });
+    expect(data.getCell("A1").value).toBe("master");
+  });
+});
+
 describe("read round-trip — data validations", () => {
   it("persists a list dropdown, a numeric between, and a custom rule and reads them back equal", () => {
     const wb = new Workbook();

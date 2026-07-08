@@ -148,6 +148,23 @@ describe("Worksheet", () => {
       expect(ws.getCell("B2").isMerged).toBe(false);
       expect(ws.getCell("A1").value).toBe("keep");
     });
+
+    it("authoring-time mergeCells propagates the master's style onto its slaves", () => {
+      ws.getCell("A1").font = { bold: true };
+      ws.getCell("B2").border = { bottom: { style: "thick" } };
+      ws.mergeCells("A1:B2");
+      // The slave adopts the master's style wholesale, dropping its own border (ExcelJS behavior).
+      expect(ws.getCell("B2").style).toEqual(ws.getCell("A1").style);
+      expect(ws.getCell("B2").border).toBeUndefined();
+    });
+
+    it("mergeCellsPreservingStyles keeps each slave's own style (read/model re-hydration path)", () => {
+      ws.getCell("A1").font = { bold: true };
+      ws.getCell("B2").border = { bottom: { style: "thick" } };
+      ws.mergeCellsPreservingStyles("A1:B2");
+      expect(ws.getCell("B2").isMerged).toBe(true);
+      expect(ws.getCell("B2").border).toEqual({ bottom: { style: "thick" } });
+    });
   });
 
   describe("name validation", () => {

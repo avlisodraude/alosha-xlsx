@@ -132,7 +132,9 @@ export function parseWorksheet(ws: Worksheet, xml: string, ctx: WorksheetReadCon
     }
   });
 
-  for (const ref of merges) ws.mergeCells(ref);
+  // Preserve each slave cell's just-parsed style: authoring-time mergeCells would overwrite it with
+  // the master's, silently dropping e.g. a border set on a non-master cell of the range.
+  for (const ref of merges) ws.mergeCellsPreservingStyles(ref);
   for (const cf of conditionalFormattings) {
     try {
       ws.addConditionalFormatting(cf);

@@ -293,12 +293,13 @@ export class Worksheet implements WorksheetHost {
     });
 
     // Re-anchor merges: those entirely below the removed region shift by `delta`, those entirely
-    // above survive unchanged, and any that straddle the removed region are dropped.
+    // above survive unchanged, and any that straddle the removed region are dropped. Styles were
+    // restored per-cell just above (restoreRow), so re-linking must preserve them (ignoreStyle).
     for (const m of oldMerges) {
       if (m.top >= start + count) {
-        this.applyMerge(new Range(m.top + delta, m.left, m.bottom + delta, m.right));
+        this.applyMerge(new Range(m.top + delta, m.left, m.bottom + delta, m.right), true);
       } else if (m.bottom < start) {
-        this.applyMerge(new Range(m.top, m.left, m.bottom, m.right));
+        this.applyMerge(new Range(m.top, m.left, m.bottom, m.right), true);
       }
     }
   }
@@ -450,7 +451,8 @@ export class Worksheet implements WorksheetHost {
       if (moved.key !== undefined) this._columnsByKey.set(moved.key, moved);
     }
 
-    // Re-anchor merges horizontally, mirroring spliceRows.
+    // Re-anchor merges horizontally, mirroring spliceRows (ignoreStyle: cells keep their own styles
+    // across the move, so re-linking a slave must not overwrite it with the master's).
     const oldMerges = [...this._merges.values()].map((r) => ({
       top: r.top,
       left: r.left,
@@ -460,9 +462,9 @@ export class Worksheet implements WorksheetHost {
     this._merges.clear();
     for (const m of oldMerges) {
       if (m.left >= start + count) {
-        this.applyMerge(new Range(m.top, m.left + delta, m.bottom, m.right + delta));
+        this.applyMerge(new Range(m.top, m.left + delta, m.bottom, m.right + delta), true);
       } else if (m.right < start) {
-        this.applyMerge(new Range(m.top, m.left, m.bottom, m.right));
+        this.applyMerge(new Range(m.top, m.left, m.bottom, m.right), true);
       }
     }
   }
@@ -523,11 +525,24 @@ export class Worksheet implements WorksheetHost {
   // --- merges -----------------------------------------------------------------------------------
 
   mergeCells(...cells: unknown[]): void {
+    this.mergeCellsChecked(cells, false);
+  }
+
+  /** Re-hydrate a merge from a read or a `set model` without overwriting each slave's own
+   *  (just-parsed) style. Authoring-time {@link mergeCells} propagates the master's style to its
+   *  slaves — the ExcelJS behavior — but reloading a saved workbook must instead keep the per-cell
+   *  styles already present inside the range (e.g. a border set on a non-master cell), or they are
+   *  silently lost on every write→read round-trip. Same conflict check as {@link mergeCells}. */
+  mergeCellsPreservingStyles(...cells: unknown[]): void {
+    this.mergeCellsChecked(cells, true);
+  }
+
+  private mergeCellsChecked(cells: unknown[], ignoreStyle: boolean): void {
     const range = normalizeMergeArgs(cells);
     for (const existing of this._merges.values()) {
       if (range.intersects(existing)) throw new MergeConflictError(range.range);
     }
-    this.applyMerge(range);
+    this.applyMerge(range, ignoreStyle);
   }
 
   unMergeCells(...cells: unknown[]): void {
@@ -542,12 +557,14 @@ export class Worksheet implements WorksheetHost {
     }
   }
 
-  /** Links the slave cells of `range` to its top-left master and records the region. */
-  private applyMerge(range: Range): void {
+  /** Links the slave cells of `range` to its top-left master and records the region. `ignoreStyle`
+   *  is forwarded to {@link Cell.merge}: `false` (authoring) copies the master's style onto each
+   *  slave, `true` (read / `set model` / merge re-anchoring) leaves each slave's own style intact. */
+  private applyMerge(range: Range, ignoreStyle = false): void {
     const master = this.getCell(range.top, range.left);
     range.forEachAddress((_addr, row, col) => {
       if (row === range.top && col === range.left) return;
-      this.getRow(row).getCell(col).merge(master);
+      this.getRow(row).getCell(col).merge(master, ignoreStyle);
     });
     this._merges.set(master.address, range);
   }
@@ -706,6 +723,8 @@ export class Worksheet implements WorksheetHost {
       this.getRow(rowModel.number).model = rowModel;
     }
 
-    for (const mergeStr of m.merges) this.applyMerge(new Range(mergeStr));
+    // ignoreStyle: the rows above already carried each cell's own style in from the model, so linking
+    // a slave to its master must not overwrite it (unlike authoring-time mergeCells).
+    for (const mergeStr of m.merges) this.applyMerge(new Range(mergeStr), true);
   }
 }
