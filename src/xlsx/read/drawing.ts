@@ -13,6 +13,7 @@
 import { InvalidDrawingError } from "../../errors.js";
 import type { CellPosition } from "../../model/index.js";
 import { cursor, localName, type XmlCursor, type XmlEvent } from "../../xml/index.js";
+import { NS } from "../parts/constants.js";
 import type { DrawingImage } from "../parts/drawing.js";
 
 /** English Metric Units per pixel — the fixed DrawingML conversion factor (matches the writer). */
@@ -33,7 +34,7 @@ interface MarkerFields {
  *  document (no `<xdr:wsDr>`) yields an empty array. */
 export function parseDrawing(xml: string): DrawingImage[] {
   const images: DrawingImage[] = [];
-  const c = cursor(xml);
+  const c = cursor(xml, [NS.drawingSpreadsheet, NS.drawingMain]);
   let ev = c.next();
   while (ev && !(ev.kind === "open" && localName(ev.name) === "wsDr")) ev = c.next();
   if (ev?.kind !== "open" || ev.selfClosing) return images;

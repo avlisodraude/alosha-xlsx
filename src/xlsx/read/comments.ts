@@ -4,6 +4,7 @@
 
 import type { RichText } from "../../model/index.js";
 import { cursor, localName, type XmlCursor } from "../../xml/index.js";
+import { NS } from "../parts/constants.js";
 import { parseRichString } from "./shared-strings.js";
 
 /** One parsed `<comment>`: its cell `ref`, resolved author, and text (plain or rich). */
@@ -16,7 +17,7 @@ export interface CommentRecord {
 /** Parses `xl/comments{n}.xml`. A malformed/rootless document yields no records; a `<comment>` with no
  *  `ref` or an `authorId` that doesn't resolve against `<authors>` is skipped. */
 export function parseComments(xml: string): CommentRecord[] {
-  const c = cursor(xml);
+  const c = cursor(xml, [NS.spreadsheetml]);
   let ev = c.next();
   while (ev && !(ev.kind === "open" && localName(ev.name) === "comments")) ev = c.next();
   if (ev?.kind !== "open" || ev.selfClosing) return [];

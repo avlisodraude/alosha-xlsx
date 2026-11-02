@@ -6,7 +6,7 @@ import { InvalidPackageError, ReadLimitError, UnsupportedFeatureError } from "..
 import { type ReadLimits, resolveReadLimits } from "../../read-limits.js";
 import { cursor } from "../../xml/index.js";
 import { readZipArchive, type ZipEntries } from "../../zip-layer.js";
-import { CONTENT_TYPE, PART_PATH, REL_TYPE } from "../parts/constants.js";
+import { CONTENT_TYPE, NS, PART_PATH, REL_TYPE } from "../parts/constants.js";
 
 /** A relationship resolved from some part's `.rels` sibling. `target` is package-root-relative for
  *  `mode: "Internal"`; left verbatim (a URL/mailto, not a package path) for `mode: "External"`. */
@@ -117,7 +117,7 @@ function readZip(bytes: Uint8Array, options?: ReadLimits): ZipEntries {
 
 /** Parses a `.rels` document (`_rels/.rels` or `xl/_rels/workbook.xml.rels`-shaped) into its entries. */
 function parseRels(xml: string): RelEntry[] {
-  const c = cursor(xml);
+  const c = cursor(xml, [NS.packageRels]);
   let ev = c.next();
   while (ev && !(ev.kind === "open" && ev.name === "Relationships")) ev = c.next();
   if (ev?.kind !== "open") return [];
@@ -140,7 +140,7 @@ function parseRels(xml: string): RelEntry[] {
 /** Sanity-checks `[Content_Types].xml` declares the workbook part as a spreadsheet main part. Fails
  *  fast on foreign OPC packages (e.g. a `.docx`) rather than parsing garbage worksheets later. */
 function assertSpreadsheetPackage(contentTypesXml: string, workbookPath: string): void {
-  const c = cursor(contentTypesXml);
+  const c = cursor(contentTypesXml, [NS.contentTypes]);
   let ev = c.next();
   while (ev && !(ev.kind === "open" && ev.name === "Types")) ev = c.next();
   if (ev?.kind !== "open") {

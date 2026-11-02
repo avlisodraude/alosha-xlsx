@@ -4,6 +4,7 @@
 // here — each `r:id` is resolved to a worksheet part through workbook.xml.rels by the orchestrator.
 
 import { cursor, localName, type XmlCursor, type XmlEvent } from "../../xml/index.js";
+import { NS } from "../parts/constants.js";
 
 export interface WorkbookHeader {
   sheets: {
@@ -22,7 +23,7 @@ type OpenEvent = Extract<XmlEvent, { kind: "open" }>;
 export function parseWorkbook(xml: string): WorkbookHeader {
   const header: WorkbookHeader = { sheets: [], date1904: false };
 
-  const c = cursor(xml);
+  const c = cursor(xml, [NS.spreadsheetml]);
   let ev = c.next();
   while (ev && !(ev.kind === "open" && localName(ev.name) === "workbook")) ev = c.next();
   if (ev?.kind !== "open" || ev.selfClosing) return header;
@@ -75,8 +76,8 @@ function parseSheets(c: XmlCursor, container: string, header: WorkbookHeader): v
   });
 }
 
-/** The `r:id` relationship reference. OOXML fixes the `r` prefix, but fall back to any `*:id` attribute
- *  so an unconventional prefix still resolves. */
+/** Relationship attributes are canonicalized to r:id by URI. Retain the qualified-name fallback
+ *  for namespace-free fragments passed to the low-level part reader. */
 function relId(sheet: OpenEvent): string {
   const direct = sheet.attrs["r:id"];
   if (direct !== undefined) return direct;

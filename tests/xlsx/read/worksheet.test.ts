@@ -55,7 +55,7 @@ function ctx(overrides?: Partial<WorksheetReadContext>): WorksheetReadContext {
 
 /** Wrap grid markup in a minimal worksheet element. */
 function ws(inner: string): string {
-  return `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${inner}</worksheet>`;
+  return `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">${inner}</worksheet>`;
 }
 
 // --- value decoding by `t` ---------------------------------------------------------------------------

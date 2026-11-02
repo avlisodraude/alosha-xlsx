@@ -5,10 +5,11 @@
 
 import type { Font, RichText, RichTextRun } from "../../model/index.js";
 import { cursor, localName, type XmlCursor } from "../../xml/index.js";
+import { NS } from "../parts/constants.js";
 
 /** Parses `xl/sharedStrings.xml`. An absent/empty part (no `<sst>` root) yields `[]`. */
 export function parseSharedStrings(xml: string): (string | RichText)[] {
-  const c = cursor(xml);
+  const c = cursor(xml, [NS.spreadsheetml]);
   let ev = c.next();
   while (ev && !(ev.kind === "open" && localName(ev.name) === "sst")) ev = c.next();
   if (ev?.kind !== "open" || ev.selfClosing) return [];

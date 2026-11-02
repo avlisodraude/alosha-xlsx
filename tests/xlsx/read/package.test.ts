@@ -12,22 +12,22 @@ const enc = new TextEncoder();
  *  part at a time and assert precisely how openPackage reacts. */
 function minimalPackage(overrides?: Partial<Record<string, string | undefined>>): ZipEntries {
   const parts: Record<string, string> = {
-    [PART_PATH.contentTypes]: `<?xml version="1.0"?><Types xmlns="ct">
+    [PART_PATH.contentTypes]: `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
       <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
       <Default Extension="xml" ContentType="application/xml"/>
       <Override PartName="/xl/workbook.xml" ContentType="${CONTENT_TYPE.workbook}"/>
       <Override PartName="/xl/worksheets/sheet1.xml" ContentType="${CONTENT_TYPE.worksheet}"/>
     </Types>`,
-    [PART_PATH.rootRels]: `<?xml version="1.0"?><Relationships xmlns="pr">
+    [PART_PATH.rootRels]: `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
       <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
     </Relationships>`,
-    [PART_PATH.workbook]: `<?xml version="1.0"?><workbook xmlns="sm"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>`,
-    [PART_PATH.workbookRels]: `<?xml version="1.0"?><Relationships xmlns="pr">
+    [PART_PATH.workbook]: `<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+    [PART_PATH.workbookRels]: `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
       <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
       <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
     </Relationships>`,
-    "xl/worksheets/sheet1.xml": `<?xml version="1.0"?><worksheet xmlns="sm"><sheetData/></worksheet>`,
-    "xl/styles.xml": `<?xml version="1.0"?><styleSheet xmlns="sm"/>`,
+    "xl/worksheets/sheet1.xml": `<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>`,
+    "xl/styles.xml": `<?xml version="1.0"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>`,
   };
 
   if (overrides) {
@@ -73,7 +73,7 @@ describe("openPackage — happy path (hand-built minimal package)", () => {
     const parts = openPackage(
       writeZipArchive(
         minimalPackage({
-          [PART_PATH.workbookRels]: `<?xml version="1.0"?><Relationships xmlns="pr">
+          [PART_PATH.workbookRels]: `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
             <Relationship Id="rId1" Type="theme" Target="../media/image1.png"/>
           </Relationships>`,
         }),
@@ -86,7 +86,7 @@ describe("openPackage — happy path (hand-built minimal package)", () => {
     const parts = openPackage(
       writeZipArchive(
         minimalPackage({
-          [PART_PATH.workbookRels]: `<?xml version="1.0"?><Relationships xmlns="pr">
+          [PART_PATH.workbookRels]: `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
             <Relationship Id="rId1" Type="theme" Target="/xl/theme/theme1.xml"/>
           </Relationships>`,
         }),
@@ -98,15 +98,15 @@ describe("openPackage — happy path (hand-built minimal package)", () => {
   it("resolves the workbook part even under a different producer's file name", () => {
     const archive = writeZipArchive(
       minimalPackage({
-        [PART_PATH.rootRels]: `<?xml version="1.0"?><Relationships xmlns="pr">
+        [PART_PATH.rootRels]: `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
           <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/book.xml"/>
         </Relationships>`,
         [PART_PATH.workbook]: undefined,
-        [PART_PATH.contentTypes]: `<?xml version="1.0"?><Types xmlns="ct">
+        [PART_PATH.contentTypes]: `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
           <Override PartName="/xl/book.xml" ContentType="${CONTENT_TYPE.workbook}"/>
         </Types>`,
-        "xl/book.xml": `<?xml version="1.0"?><workbook xmlns="sm"/>`,
-        "xl/_rels/book.xml.rels": `<?xml version="1.0"?><Relationships xmlns="pr"/>`,
+        "xl/book.xml": `<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>`,
+        "xl/_rels/book.xml.rels": `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>`,
         [PART_PATH.workbookRels]: undefined,
       }),
     );
@@ -125,7 +125,7 @@ describe("openPackage — happy path (hand-built minimal package)", () => {
     const parts = openPackage(
       writeZipArchive(
         minimalPackage({
-          "xl/worksheets/_rels/sheet1.xml.rels": `<?xml version="1.0"?><Relationships xmlns="pr">
+          "xl/worksheets/_rels/sheet1.xml.rels": `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
             <Relationship Id="rId1" Type="hyperlink" Target="https://example.com" TargetMode="External"/>
           </Relationships>`,
         }),
@@ -143,7 +143,7 @@ describe("openPackage — happy path (hand-built minimal package)", () => {
     const parts = openPackage(
       writeZipArchive(
         minimalPackage({
-          "xl/worksheets/_rels/sheet1.xml.rels": `<?xml version="1.0"?><Relationships xmlns="pr">
+          "xl/worksheets/_rels/sheet1.xml.rels": `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
             <Relationship Id="rId1" Type="image" Target="../media/image1.png"/>
           </Relationships>`,
         }),
@@ -177,7 +177,7 @@ describe("openPackage — errors", () => {
   it("throws InvalidPackageError when _rels/.rels has no officeDocument relationship", () => {
     const archive = writeZipArchive(
       minimalPackage({
-        [PART_PATH.rootRels]: `<?xml version="1.0"?><Relationships xmlns="pr">
+        [PART_PATH.rootRels]: `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
           <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
         </Relationships>`,
       }),
@@ -198,7 +198,7 @@ describe("openPackage — errors", () => {
   it("throws UnsupportedFeatureError when the workbook part isn't declared as a spreadsheet", () => {
     const archive = writeZipArchive(
       minimalPackage({
-        [PART_PATH.contentTypes]: `<?xml version="1.0"?><Types xmlns="ct">
+        [PART_PATH.contentTypes]: `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
           <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
         </Types>`,
       }),
