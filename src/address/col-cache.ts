@@ -2,6 +2,7 @@
 // (see docs/API-AUDIT.md §5) as typed free functions instead of a class.
 
 import { InvalidAddressError } from "../errors.js";
+import { assertColumnNumber, assertRowNumber, MAX_COL, MAX_ROW } from "./limits.js";
 
 /** 1-based rows/cols everywhere in this module's public surface. */
 export interface Decoded {
@@ -15,11 +16,6 @@ export interface DecodedEx extends Decoded {
   $col$row: string;
   sheetName?: string;
 }
-
-/** Excel's hard cap on rows (2^20). */
-const MAX_ROW = 1_048_576;
-/** Excel's hard cap on columns — 'XFD'. */
-const MAX_COL = 16_384;
 
 const LETTER_RE = /^[A-Za-z]+$/;
 const ADDRESS_RE = /^([A-Za-z]+)(\d+)$/;
@@ -43,7 +39,7 @@ export function colLetterToNumber(letter: string): number {
   const cached = colLetterToNumberCache.get(letter);
   if (cached !== undefined) return cached;
 
-  if (!LETTER_RE.test(letter)) {
+  if (letter.length > 3 || !LETTER_RE.test(letter)) {
     throw new InvalidAddressError(letter);
   }
 
@@ -53,6 +49,7 @@ export function colLetterToNumber(letter: string): number {
     col = col * 26 + (upper.charCodeAt(i) - 64);
   }
 
+  assertColumnNumber(col);
   colLetterToNumberCache.set(letter, col);
   return col;
 }
@@ -62,9 +59,7 @@ export function colNumberToLetter(col: number): string {
   const cached = colNumberToLetterCache.get(col);
   if (cached !== undefined) return cached;
 
-  if (!Number.isInteger(col) || col < 1) {
-    throw new InvalidAddressError(String(col));
-  }
+  assertColumnNumber(col);
 
   let n = col;
   let letters = "";
@@ -80,6 +75,7 @@ export function colNumberToLetter(col: number): string {
 
 /** (row=1,col=2) -> 'B1'. */
 export function encodeAddress(row: number, col: number): string {
+  assertRowNumber(row);
   return `${colNumberToLetter(col)}${row}`;
 }
 

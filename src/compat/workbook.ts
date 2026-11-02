@@ -35,8 +35,7 @@
 
 import { encodeAddress } from "../address/index.js";
 import { UnsupportedFeatureError } from "../errors.js";
-import type { XlsxAccessor } from "../index.js";
-import { Cell, Column, Row, Workbook, Worksheet } from "../index.js";
+import { Cell, Column, Row, Worksheet } from "../index.js";
 import {
   CellType,
   type Comment,
@@ -48,11 +47,13 @@ import {
   type Style,
   type WorksheetView,
 } from "../model/index.js";
+import { Workbook } from "../model/workbook.js";
 import {
   WorkbookWriter as CoreStreamWorkbookWriter,
   type WorksheetWriter as CoreStreamWorksheetWriter,
   type NodeWritableLike,
 } from "../xlsx/stream/index.js";
+import type { XlsxAccessor } from "../xlsx-accessor.js";
 import { applyExcelJsStyle } from "./style-compat.js";
 import { toExcelJSValueType } from "./value-type.js";
 

@@ -15,6 +15,7 @@
 
 import { decodeAddress, Range } from "../../address/index.js";
 import { DuplicateWorksheetNameError, UnsupportedFeatureError } from "../../errors.js";
+import { assertFiniteScalar } from "../../model/cell-value.js";
 import type {
   AddImageOptions,
   Column,
@@ -188,11 +189,12 @@ export class WorksheetWriter {
   addRow(data: RowValues): StreamedRow {
     this.workbook.assertWritable();
     if (this.committed) throw new Error(`worksheet "${this.name}" is already committed`);
-    const number = ++this.rowCount;
+    const number = this.rowCount + 1;
     // Host the transient row on the model worksheet so styles/comments/validations resolve, but never
     // register it (no `getRow`/`addRow` on the model) — the row body is not retained.
     const row = new Row(this.sheet, number) as StreamedRow;
     row.values = data;
+    this.rowCount = number;
     let committed = false;
     row.commit = () => {
       if (committed) throw new Error(`row ${number} is already committed`);
@@ -206,8 +208,12 @@ export class WorksheetWriter {
     this.workbook.assertWritable();
     if (this.committed) throw new Error(`worksheet "${this.name}" is already committed`);
     if (row.number !== this.lastCommittedRow + 1) throw new Error("commit rows in creation order");
-    this.ensureStarted();
     const model = row.model;
+    for (const cell of model.cells) {
+      assertFiniteScalar(cell.value);
+      assertFiniteScalar(cell.result);
+    }
+    this.ensureStarted();
     const formulas = this.planFormulas(model);
     const xml = renderRowXml(model, this.workbook.context, this.hyperlinks, formulas);
     if (xml.length > 0) this.workbook.pushSheetChunk(xml);

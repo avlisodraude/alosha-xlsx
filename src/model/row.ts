@@ -3,10 +3,17 @@
 // to already-existing cells (docs/API-AUDIT.md §3's `_applyStyle`), and splice.
 
 import { colLetterToNumber, decodeAddress, encodeAddress } from "../address/index.js";
+import {
+  assertColumnNumber,
+  assertRowNumber,
+  assertSpliceBounds,
+  MAX_COL,
+} from "../address/limits.js";
 import { InvalidRowNumberError } from "../errors.js";
 import { Cell, type CellModel } from "./cell.js";
-import type { CellValue } from "./cell-value.js";
+import { type CellValue, detectType } from "./cell-value.js";
 import { CellType } from "./enums.js";
+import { modelReadBudget } from "./read-budget.js";
 import type { Alignment, Borders, Fill, Font, Protection, Style } from "./style.js";
 import type { RowValues } from "./types.js";
 import type { WorksheetHost } from "./worksheet-host.js";
@@ -34,7 +41,9 @@ export class Row {
   constructor(
     public readonly worksheet: WorksheetHost,
     public readonly number: number,
-  ) {}
+  ) {
+    assertRowNumber(number);
+  }
 
   get collapsed(): boolean {
     return this.outlineLevel > this.worksheet.properties.outlineLevelRow;
@@ -49,8 +58,11 @@ export class Row {
 
   getCell(col: number | string): Cell {
     const colNumber = this.resolveColNumber(col);
+    assertColumnNumber(colNumber);
     const existing = this._cells[colNumber];
     if (existing) return existing;
+
+    modelReadBudget(this.worksheet)?.claim("maxCells");
 
     const column = this.worksheet.getColumn(colNumber);
     const cell = new Cell(this, column, encodeAddress(this.number, colNumber));
@@ -59,6 +71,7 @@ export class Row {
   }
 
   findCell(col: number): Cell | undefined {
+    assertColumnNumber(col);
     return this._cells[col];
   }
 
@@ -133,8 +146,11 @@ export class Row {
   }
 
   splice(start: number, count: number, ...inserts: CellValue[]): void {
+    assertColumnNumber(start);
     const currentMax = this._cells.length - 1;
     const insertCount = inserts.length;
+    assertSpliceBounds(start, count, insertCount, currentMax, MAX_COL);
+    for (const value of inserts) detectType(value);
 
     const tail: Array<{ value: CellValue; style: Style } | undefined> = [];
     for (let col = start + count; col <= currentMax; col++) {

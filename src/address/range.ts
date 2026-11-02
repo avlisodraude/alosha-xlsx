@@ -3,6 +3,7 @@
 
 import { InvalidRangeError } from "../errors.js";
 import { type Decoded, decodeEx, encodeAddress } from "./col-cache.js";
+import { MAX_COL, MAX_ROW } from "./limits.js";
 
 export type RangeSource =
   | string // 'A1:B2' or 'A1'
@@ -35,6 +36,9 @@ function assertValidBox(box: Box, source: unknown): void {
     if (!Number.isInteger(n) || n < 1) {
       throw new InvalidRangeError(source);
     }
+  }
+  if (box.top > MAX_ROW || box.bottom > MAX_ROW || box.left > MAX_COL || box.right > MAX_COL) {
+    throw new InvalidRangeError(source);
   }
 }
 
@@ -156,6 +160,7 @@ export class Range {
 
   /** Grows the box to include the given box (union of bounds). */
   expand(top: number, left: number, bottom: number, right: number): void {
+    assertValidBox({ top, left, bottom, right }, [top, left, bottom, right]);
     this.top = Math.min(this.top, top);
     this.left = Math.min(this.left, left);
     this.bottom = Math.max(this.bottom, bottom);

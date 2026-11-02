@@ -10,10 +10,13 @@
 // A `<f>` present makes it a formula cell whose cached `<v>` becomes the typed `result`.
 
 import { decodeAddress, encodeAddress } from "../../address/index.js";
+import { assertColumnNumber, assertRowNumber } from "../../address/limits.js";
 import {
+  InvalidAddressError,
   InvalidCellValueError,
   InvalidConditionalFormattingError,
   InvalidPaneError,
+  InvalidRangeError,
 } from "../../errors.js";
 import {
   type CellError,
@@ -45,6 +48,7 @@ import {
   type Worksheet,
   type WorksheetView,
 } from "../../model/index.js";
+import { modelReadBudget } from "../../model/read-budget.js";
 import { cursor, localName, type XmlCursor, type XmlEvent } from "../../xml/index.js";
 import { serialToDate } from "../date.js";
 import { REL_TYPE } from "../parts/constants.js";
@@ -255,9 +259,14 @@ function parseCols(
       if (!col.selfClosing) c.textUntilClose(col.name);
       return;
     }
-    const min = num(col.attrs.min);
-    const max = num(col.attrs.max);
-    if (min === undefined || max === undefined) return;
+    if (col.attrs.min === undefined || col.attrs.max === undefined)
+      throw new InvalidRangeError(col.attrs);
+    const min = Number(col.attrs.min);
+    const max = Number(col.attrs.max);
+    assertColumnNumber(min);
+    assertColumnNumber(max);
+    if (max < min) throw new InvalidRangeError([min, max]);
+    modelReadBudget(ws)?.claim("maxColumnDefinitions", max - min + 1);
 
     const width = num(col.attrs.width);
     const hidden = truthy(col.attrs.hidden);
@@ -288,7 +297,7 @@ function parseSheetData(
       if (!rowEl.selfClosing) c.textUntilClose(rowEl.name);
       return;
     }
-    expectedRow = num(rowEl.attrs.r) ?? expectedRow + 1;
+    expectedRow = rowEl.attrs.r === undefined ? expectedRow + 1 : Number(rowEl.attrs.r);
     parseRow(c, rowEl, expectedRow, ws, ctx, sharedMasters);
   });
 }
@@ -343,7 +352,14 @@ function parseCell(
   ctx: WorksheetReadContext,
   sharedMasters: Map<string, string>,
 ): number {
-  const col = cellEl.attrs.r !== undefined ? decodeAddress(cellEl.attrs.r).col : fallbackCol;
+  let col = fallbackCol;
+  if (cellEl.attrs.r !== undefined) {
+    const decoded = decodeAddress(cellEl.attrs.r);
+    if (decoded.row !== row.number) throw new InvalidRangeError(cellEl.attrs.r);
+    col = decoded.col;
+  }
+  assertColumnNumber(col);
+  assertRowNumber(row.number);
   const styleIdx = num(cellEl.attrs.s) ?? 0;
   const t = cellEl.attrs.t;
 
@@ -906,8 +922,8 @@ function applyHyperlink(ws: Worksheet, link: HyperlinkRef, rels: Map<string, Res
  *  separate `comments` rel (not referenced by any worksheet element, only discoverable by rel type,
  *  mirroring the writer which allocates it alongside but never embeds its rId) to `comments{n}.xml`
  *  and apply its records to `cell.note`. A missing `<legacyDrawing>`, an unresolved rel, or an absent
- *  part leaves every cell without a note; a comment with a malformed `ref` is skipped — none of this
- *  ever throws. */
+ *  part leaves every cell without a note; a comment with a malformed `ref` is skipped. Allocation
+ *  budget failures still propagate to the caller. */
 function applyComments(
   ws: Worksheet,
   legacyDrawingRid: string | undefined,
@@ -924,7 +940,8 @@ function applyComments(
   for (const record of parseComments(commentsXml)) {
     try {
       ws.getCell(record.ref).note = { texts: record.texts, author: record.author };
-    } catch {
+    } catch (error) {
+      if (!(error instanceof InvalidAddressError)) throw error;
       // Malformed ref (InvalidAddressError from decodeAddress) — skip this comment, keep the rest.
     }
   }

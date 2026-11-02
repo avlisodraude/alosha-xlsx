@@ -1,11 +1,16 @@
 import { ReadLimitError } from "./errors.js";
 
-/** ZIP allocation budgets, in bytes except maxEntries. Infinity explicitly disables a limit. */
+/** Workbook-wide import budgets. Byte limits apply to ZIP data; model limits count allocations/work.
+ * Infinity explicitly disables a limit. */
 export interface ReadLimits {
   maxInputBytes?: number;
   maxEntries?: number;
   maxEntryBytes?: number;
   maxTotalBytes?: number;
+  maxCells?: number;
+  maxRows?: number;
+  maxMergeCells?: number;
+  maxColumnDefinitions?: number;
 }
 
 export const DEFAULT_READ_LIMITS: Readonly<Required<ReadLimits>> = Object.freeze({
@@ -13,6 +18,10 @@ export const DEFAULT_READ_LIMITS: Readonly<Required<ReadLimits>> = Object.freeze
   maxEntries: 10_000,
   maxEntryBytes: 256 * 1024 * 1024,
   maxTotalBytes: 1024 * 1024 * 1024,
+  maxCells: 1_000_000,
+  maxRows: 1_048_576,
+  maxMergeCells: 100_000,
+  maxColumnDefinitions: 100_000,
 });
 
 export function resolveReadLimits(options?: ReadLimits): Required<ReadLimits> {
@@ -30,4 +39,24 @@ export function resolveReadLimits(options?: ReadLimits): Required<ReadLimits> {
 
 export function checkReadLimit(limit: keyof ReadLimits, maximum: number, actual: number): void {
   if (actual > maximum) throw new ReadLimitError(limit, maximum, actual);
+}
+
+type ModelLimit = "maxCells" | "maxRows" | "maxMergeCells" | "maxColumnDefinitions";
+
+/** Internal counter shared by all worksheets in a single import, never by separate reads. */
+export class ModelReadBudget {
+  private readonly used: Record<ModelLimit, number> = {
+    maxCells: 0,
+    maxRows: 0,
+    maxMergeCells: 0,
+    maxColumnDefinitions: 0,
+  };
+
+  constructor(private readonly limits: Required<ReadLimits>) {}
+
+  claim(limit: ModelLimit, count = 1): void {
+    const actual = this.used[limit] + count;
+    checkReadLimit(limit, this.limits[limit], actual);
+    this.used[limit] = actual;
+  }
 }

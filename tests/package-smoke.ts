@@ -55,9 +55,11 @@ assert.equal(new ExcelJS.Workbook().addWorksheet("C").name, "C");
   );
   execFileSync(process.execPath, [join(temp, "consumer.cjs")], { stdio: "pipe" });
 
-  const typed = `import { Workbook } from "@alosha/xlsx";
+  const typed = `import { Workbook, type ReadOptions } from "@alosha/xlsx";
 import ExcelJS from "@alosha/xlsx/compat";
 const wb: Workbook = new Workbook();
+const limits: ReadOptions = { maxCells: 100, maxRows: 100, maxMergeCells: 100, maxColumnDefinitions: 100 };
+void wb.xlsx.load(new Uint8Array(), limits).catch(() => undefined);
 wb.addWorksheet("S").getCell("A1").value = "typed";
 new ExcelJS.Workbook().addWorksheet("C");
 `;
@@ -102,7 +104,7 @@ import { Workbook, WorkbookWriter } from "@alosha/xlsx";
 import ExcelJS from "@alosha/xlsx/compat";
 globalThis.smoke = async () => {
   const wb = new Workbook(); wb.addWorksheet("S").getCell("A1").value = "browser";
-  const loaded = new Workbook(); await loaded.xlsx.load(await wb.xlsx.writeBuffer());
+  const loaded = new Workbook(); await loaded.xlsx.load(await wb.xlsx.writeBuffer(), { maxCells: 1, maxRows: 1 });
   if (loaded.getWorksheet("S").getCell("A1").value !== "browser") throw Error("buffer roundtrip");
   if (new ExcelJS.Workbook().addWorksheet("C").name !== "C") throw Error("compat export");
   const writer = new WorkbookWriter(); writer.addWorksheet("Stream").addRow([7]).commit();

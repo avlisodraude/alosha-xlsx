@@ -5,8 +5,9 @@
 
 import type { ImageExtension, Worksheet } from "../model/index.js";
 import { Workbook } from "../model/index.js";
+import { withModelReadBudget } from "../model/read-budget.js";
 import { readFileBytes } from "../platform/io.js";
-import { type ReadLimits, resolveReadLimits } from "../read-limits.js";
+import { ModelReadBudget, type ReadLimits, resolveReadLimits } from "../read-limits.js";
 import { IMAGE_CONTENT_TYPE, PART_PATH, REL_TYPE } from "./parts/constants.js";
 import { parseDrawing } from "./read/drawing.js";
 import { openPackage, type PackageParts, type ResolvedRel } from "./read/package.js";
@@ -16,11 +17,12 @@ import { parseStyles } from "./read/styles.js";
 import { parseWorkbook } from "./read/workbook.js";
 import { parseWorksheet } from "./read/worksheet.js";
 
-/** Input/archive allocation limits; omitted limits use DEFAULT_READ_LIMITS. */
+/** Input/archive and model allocation limits; omitted limits use DEFAULT_READ_LIMITS. */
 export type ReadOptions = ReadLimits;
 
 /** Parse a buffered `.xlsx` into a `Workbook`. Environment-agnostic (no `fs`); see `readWorkbookFile`. */
 export function readWorkbookBuffer(bytes: Uint8Array, options?: ReadOptions): Workbook {
+  const budget = new ModelReadBudget(resolveReadLimits(options));
   const pkg = openPackage(bytes, options);
   const rels = pkg.workbookRels();
 
@@ -54,10 +56,12 @@ export function readWorkbookBuffer(bytes: Uint8Array, options?: ReadOptions): Wo
     if (target === undefined) continue;
     const sheetXml = pkg.text(target);
     const sheetRels = pkg.partRels(target);
-    if (sheetXml !== undefined) {
-      parseWorksheet(ws, sheetXml, { ...ctx, rels: sheetRels });
-    }
-    applyDrawing(wb, ws, pkg, sheetRels, mediaCache);
+    withModelReadBudget(ws, budget, () => {
+      if (sheetXml !== undefined) {
+        parseWorksheet(ws, sheetXml, { ...ctx, rels: sheetRels });
+      }
+      applyDrawing(wb, ws, pkg, sheetRels, mediaCache);
+    });
   }
 
   // Doc-props sit at their conventional paths (both our writer and Excel/LibreOffice use these).
