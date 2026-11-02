@@ -99,6 +99,33 @@ export function parseWorksheet(ws: Worksheet, xml: string, ctx: WorksheetReadCon
 
   c.eachChild(ev.name, (child) => {
     switch (localName(child.name)) {
+      case "sheetPr":
+        if (!child.selfClosing)
+          c.eachChild(child.name, (property) => {
+            if (localName(property.name) === "tabColor") {
+              const { rgb, theme, indexed } = property.attrs;
+              if (rgb !== undefined) ws.properties.tabColor = { argb: rgb };
+              else if (theme !== undefined) ws.properties.tabColor = { theme: Number(theme) };
+              else if (indexed !== undefined) ws.properties.tabColor = { indexed: Number(indexed) };
+            }
+            if (!property.selfClosing) c.textUntilClose(property.name);
+          });
+        break;
+      case "sheetFormatPr": {
+        for (const key of [
+          "defaultRowHeight",
+          "defaultColWidth",
+          "outlineLevelRow",
+          "outlineLevelCol",
+          "dyDescent",
+        ] as const) {
+          const raw = child.attrs[key] ?? child.attrs[`x14ac:${key}`];
+          const value = num(raw);
+          if (value !== undefined && value >= 0) ws.properties[key] = value;
+        }
+        if (!child.selfClosing) c.textUntilClose(child.name);
+        break;
+      }
       case "sheetViews":
         if (!child.selfClosing) parseSheetViews(c, child.name, ws);
         break;

@@ -10,7 +10,7 @@ ExcelJS-shaped alternative (`ExcelJS.stream.xlsx.WorkbookWriter`): add a sheet, 
 a time, and each committed row's XML is deflated straight into an open zip entry and handed to your
 output sink. Memory stays roughly flat no matter how many rows you write.
 
-At 500,000 rows × 5 columns, streaming holds **~15.6× less peak memory** than the buffered writer
+In the published 500,000-row × 5-column benchmark, streaming held **~14.2× less peak memory** than the buffered writer
 while sustaining **~1.9× the write throughput** (see [Benchmarks](#benchmarks)).
 
 ## Quick start
@@ -21,10 +21,12 @@ import { WorkbookWriter } from "@alosha/xlsx";
 const wb = new WorkbookWriter({ filename: "big-report.xlsx" });
 const ws = wb.addWorksheet("Data");
 
-for (const record of hugeDataset) {
-  ws.addRow([record.id, record.name, record.amount, record.when]).commit();
-  // ^ this row's XML is rendered and deflated to disk now — nothing is retained
+async function* exportRows() {
+  for await (const record of hugeDataset) {
+    yield [record.id, record.name, record.amount, record.when];
+  }
 }
+await ws.writeRows(exportRows()); // flush to the destination every 10,000 rows
 
 ws.commit();       // finalise the worksheet part
 await wb.commit(); // write styles/workbook/content-types, end the zip, flush the file
@@ -46,6 +48,21 @@ The lifecycle is always the same three commits:
 One sheet streams at a time: once a sheet's first row commits, its zip entry is open, and starting
 rows on a *different* sheet before calling `ws.commit()` on the first throws. Finish a sheet, then
 start the next.
+
+For manual `addRow().commit()` loops, call `await wb.flush()` periodically. A fully synchronous
+loop prevents the background pump from running, so compressed output accumulates until the loop ends.
+`writeRows(rows, { flushEvery: 10_000 })` provides those await points automatically and accepts sync or
+async iterables. `flushEvery` must be a positive safe integer. `flush()` waits for backpressure to clear;
+it does not promise that the operating system has persisted the bytes to disk.
+
+Rows must be committed once, in creation order, before the worksheet commits. Invalid sheet names
+use the same validation as buffered workbooks. Destination errors or premature closes reject pending
+`flush()`/`commit()` calls and stop further row production.
+
+Shared-formula masters require `shareType: "shared"`, a formula, and the complete `ref` up front;
+slaves must follow the master and lie within that range. Array masters require `shareType: "array"`,
+a formula, and `ref`. A slave referencing an undeclared master is rejected instead of emitting an empty
+formula. Inline rich text preserves its runs and fonts with the default `useSharedStrings: false`.
 
 ## Constructing: options and output sinks
 
@@ -189,10 +206,11 @@ From [`BENCHMARKS.md`](../BENCHMARKS.md) (`pnpm bench:stream`, Apple M3 Pro, Nod
 
 | Mode | Write time | Throughput | Peak RSS |
 | --- | --- | --- | --- |
-| streaming (`WorkbookWriter`) | 6.32 s | 79,074 rows/s | 188.6 MiB |
-| buffered (`writeWorkbookBuffer`) | 12.05 s | 41,500 rows/s | 2939.6 MiB |
+| streaming (`WorkbookWriter`) | 4.87 s | 102,630 rows/s | 191.0 MiB |
+| buffered (`writeWorkbookBuffer`) | 9.42 s | 53,054 rows/s | 2717.7 MiB |
 
-**~15.6× less peak memory at ~1.9× the throughput.** The buffered writer must materialise the full
+**~14.2× less peak memory at ~1.9× the throughput.** These are the published baseline, not measurements
+of every subsequent release. The buffered writer must materialise the full
 model plus the whole output buffer, so its memory grows with the sheet; the streaming writer's
 stays roughly flat as rows grow.
 
@@ -222,11 +240,13 @@ class WorkbookWriter implements AsyncIterable<Uint8Array> {
   addWorksheet(name?: string, options?: { state?: "visible" | "hidden" | "veryHidden" }): WorksheetWriter;
   addImage(options: AddImageOptions): number;   // register once, place per-sheet
   commit(): Promise<void>;                      // finalise the archive
+  flush(): Promise<void>;                       // wait for destination backpressure
   // + doc metadata: creator, created, modified, title, …, properties, calcProperties, views
 }
 
 class WorksheetWriter {
   addRow(values: RowValues): StreamedRow;       // StreamedRow = Row & { commit(): void }
+  writeRows(rows: Iterable<RowValues> | AsyncIterable<RowValues>, options?: { flushEvery?: number }): Promise<void>;
   commit(): void;                               // finalise this sheet
   mergeCells(...args): void;
   addConditionalFormatting(cf): ConditionalFormatting;

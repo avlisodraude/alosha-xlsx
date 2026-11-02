@@ -56,6 +56,22 @@ describe("Worksheet", () => {
       expect(ws.getCell("A3").value).toBe("c");
     });
 
+    it("appends correctly after deleting trailing rows, inserting, and replacing the model", () => {
+      ws.getCell("A100").value = "last";
+      expect(ws.addRow(["next"]).number).toBe(101);
+      ws.spliceRows(50, 52);
+      expect(ws.rowCount).toBe(0);
+      expect(ws.addRow(["reset"]).number).toBe(1);
+      ws.insertRow(1, ["first"]);
+      expect(ws.addRow(["third"]).number).toBe(3);
+      const empty = wb.addWorksheet("Empty");
+      ws.model = { ...empty.model, id: ws.id, name: ws.name };
+      expect(ws.rowCount).toBe(0);
+      expect(ws.addRow(["new"]).number).toBe(1);
+      ws.getRow(500);
+      expect(ws.addRow(["sparse"]).number).toBe(501);
+    });
+
     it("getSheetValues returns a sparse, 1-based array", () => {
       ws.getRow(1).values = ["a", "b"];
       ws.getRow(3).values = ["c"];

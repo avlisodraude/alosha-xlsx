@@ -9,6 +9,7 @@
  */
 
 import { Workbook } from "./model/index.js";
+import { checkReadLimit, resolveReadLimits } from "./read-limits.js";
 import {
   type ReadOptions,
   readWorkbookBuffer,
@@ -21,6 +22,7 @@ import {
 export * from "./address/index.js";
 export * from "./errors.js";
 export * from "./model/index.js";
+export { DEFAULT_READ_LIMITS, type ReadLimits } from "./read-limits.js";
 export * from "./xlsx/index.js";
 
 /** A source of chunks for {@link XlsxAccessor.read}; a Node `Readable` satisfies this structurally. */
@@ -49,12 +51,14 @@ declare module "./model/workbook.js" {
 }
 
 /** Concatenate a byte stream's chunks into a single buffer (no `fs`; browser-safe). */
-async function drainStream(stream: ByteStream): Promise<Uint8Array> {
+async function drainStream(stream: ByteStream, options?: ReadOptions): Promise<Uint8Array> {
+  const limits = resolveReadLimits(options);
   const chunks: Uint8Array[] = [];
   let total = 0;
   for await (const chunk of stream) {
     chunks.push(chunk);
     total += chunk.length;
+    checkReadLimit("maxInputBytes", limits.maxInputBytes, total);
   }
   const out = new Uint8Array(total);
   let offset = 0;
@@ -71,16 +75,16 @@ Object.defineProperty(Workbook.prototype, "xlsx", {
     return {
       writeBuffer: (options?: WriteOptions) => Promise.resolve(writeWorkbookBuffer(this, options)),
       writeFile: (path: string, options?: WriteOptions) => writeWorkbookFile(this, path, options),
-      load: (data: Uint8Array, options?: ReadOptions) => {
+      load: async (data: Uint8Array, options?: ReadOptions) => {
         this.model = readWorkbookBuffer(data, options).model;
-        return Promise.resolve(this);
+        return this;
       },
       readFile: async (path: string, options?: ReadOptions) => {
         this.model = (await readWorkbookFile(path, options)).model;
         return this;
       },
       read: async (stream: ByteStream, options?: ReadOptions) => {
-        this.model = readWorkbookBuffer(await drainStream(stream), options).model;
+        this.model = readWorkbookBuffer(await drainStream(stream, options), options).model;
         return this;
       },
     };
