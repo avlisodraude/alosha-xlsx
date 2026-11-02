@@ -8,7 +8,7 @@ worksheet, every row, and the entire output archive in memory at once — fine f
 for exports with hundreds of thousands of rows. The streaming `WorkbookWriter` is an incremental,
 ExcelJS-shaped alternative (`ExcelJS.stream.xlsx.WorkbookWriter`): add a sheet, commit rows one at
 a time, and each committed row's XML is deflated straight into an open zip entry and handed to your
-output sink. Memory stays roughly flat no matter how many rows you write.
+output sink. Awaitable row production bounds the compressed output queue; retained metadata can still grow.
 
 In the published 500,000-row × 5-column benchmark, streaming held **~14.2× less peak memory** than the buffered writer
 while sustaining **~1.9× the write throughput** (see [Benchmarks](#benchmarks)).
@@ -26,7 +26,7 @@ async function* exportRows() {
     yield [record.id, record.name, record.amount, record.when];
   }
 }
-await ws.writeRows(exportRows()); // flush to the destination every 10,000 rows
+await ws.writeRows(exportRows()); // pauses production when the destination falls behind
 
 ws.commit();       // finalise the worksheet part
 await wb.commit(); // write styles/workbook/content-types, end the zip, flush the file
@@ -49,11 +49,24 @@ One sheet streams at a time: once a sheet's first row commits, its zip entry is 
 rows on a *different* sheet before calling `ws.commit()` on the first throws. Finish a sheet, then
 start the next.
 
-For manual `addRow().commit()` loops, call `await wb.flush()` periodically. A fully synchronous
-loop prevents the background pump from running, so compressed output accumulates until the loop ends.
-`writeRows(rows, { flushEvery: 10_000 })` provides those await points automatically and accepts sync or
-async iterables. `flushEvery` must be a positive safe integer. `flush()` waits for backpressure to clear;
-it does not promise that the operating system has persisted the bytes to disk.
+Use `await ws.addRowAsync(values)` for simple loops, or `await row.commitAsync()` after styling a
+row. `writeRows()` accepts sync/async iterables and observes capacity before requesting each row.
+Use one producer at a time and commit rows in order. `flushEvery` defaults to 10,000 and must be a
+positive safe integer; capacity is checked on every row regardless of that setting.
+
+Synchronous `row.commit()` remains available, but cannot wait for a slow destination. Compressed
+output has a 16 MiB hard ceiling by default; exceeding it aborts with `StreamBufferLimitError`
+(`code: "STREAM_BUFFER_LIMIT"`, `maximum`, `actual`). Prefer awaitable row methods for large exports.
+`ready()` waits until queued/in-flight bytes fall below the high-water mark (default 1 MiB).
+`flush()` waits for all produced bytes to be accepted by a Node/file destination and is a no-op for
+async-iterable output. Neither method promises that the operating system persisted bytes to disk.
+
+The byte limits cover compressed output waiting for or being processed by the single consumer,
+not destination buffers, input objects, styles, shared strings, images, or other workbook metadata.
+A single row or synchronous sheet/workbook finalization batch can exceed the ceiling even with
+awaitable production; raise `maxBufferedBytes` for those workloads. Both limits must be positive
+safe integers, with `highWaterMarkBytes <= maxBufferedBytes`. If only a smaller hard ceiling is
+provided, the default high-water mark is clamped to it.
 
 Rows must be committed once, in creation order, before the worksheet commits. Invalid sheet names
 use the same validation as buffered workbooks. Destination errors or premature closes reject pending
@@ -80,6 +93,9 @@ new WorkbookWriter(options?: WorkbookWriterOptions)
 | `filename` | — | Write the archive to this path (Node only; `node:fs` is imported lazily). |
 | `stream` | — | Pipe the archive into a Node `Writable` (e.g. an HTTP response). Backpressure is honoured. |
 | `useSharedStrings` | **`false`** | Emit a shared-string table instead of inline strings. See [below](#the-usesharedstrings-false-default) for why the default is the opposite of the buffered writer's. |
+| `signal` | — | `AbortSignal` to cancel production, consumption, or final destination completion. |
+| `highWaterMarkBytes` | 1 MiB | Pause awaitable row production at this compressed-output threshold. |
+| `maxBufferedBytes` | 16 MiB | Abort before retaining output beyond this hard ceiling. |
 | `useStyles` | `true` | Intern cell styles into `styles.xml` (same as the buffered `WriteOptions.useStyles`). |
 
 `filename` and `stream` are mutually exclusive. When **neither** is given, the writer itself is the
@@ -89,7 +105,7 @@ sink: it implements `AsyncIterable<Uint8Array>` and yields archive chunks as the
 
 No `node:*` imports are touched on this path, so it works in the browser, a worker, or an edge
 runtime as well as Node. Consume the chunks concurrently with producing them (start iterating
-before/while you commit, or right after — chunks queue until read):
+before producing rows; waiting producers need a running consumer):
 
 ```ts
 import { WorkbookWriter } from "@alosha/xlsx";
@@ -104,9 +120,10 @@ const drained = (async () => {
   return chunks;
 })();
 
-for (let i = 1; i <= 1_000_000; i++) {
-  ws.addRow([i, `row ${i}`, i * 0.01]).commit();
+function* rows() {
+  for (let i = 1; i <= 1_000_000; i++) yield [i, `row ${i}`, i * 0.01];
 }
+await ws.writeRows(rows());
 ws.commit();
 await wb.commit();
 
@@ -136,14 +153,33 @@ const wb = new WorkbookWriter({ stream: createWriteStream("export.xlsx") });
 The `Writable` is duck-typed (`write`/`end`/`once`/`destroy`), so anything structurally compatible
 works and browser bundles that never pass one stay free of `node:*` imports.
 
+## Cancellation
+
+```ts
+const controller = new AbortController();
+const wb = new WorkbookWriter({ filename: "export.xlsx", signal: controller.signal });
+// controller.abort(reason), or wb.abort(reason), stops the export.
+```
+
+Cancellation rejects pending capacity, flush, input-read, and commit waits with `ExportAbortedError`
+(`code: "EXPORT_ABORTED"`, `.reason`), clears queued output, and destroys the destination.
+Ending output iteration early also cancels the export. Destination failures retain the original error. Input-source failures reject `writeRows()` with
+the original error and cancel output readers with that error as the abort reason. Partial output files may remain and must not be treated as completed workbooks.
+An abort after successful completion has no effect.
+
+`writeRows()` requests source iterator cleanup on interruption without waiting for stuck external
+I/O. Pass the same signal to your database/network source to cancel its own pending work.
+`bufferedBytes` exposes current queued/in-flight compressed bytes. The compat writer forwards these
+options and awaitable methods too. Output supports one consumer; concurrent `next()` calls reject.
+
 ## The `useSharedStrings: false` default
 
 OOXML forces exactly one thing to be buffered when strings are *shared*: the sharedStrings table.
 Sheets reference strings by index, but the table itself is written **after** every sheet — so every
 distinct string must be retained in memory until the very end. That's why the streaming writer
 defaults to `useSharedStrings: false` (each string cell carries its text inline as `<is><t>`), the
-same choice ExcelJS's `WorkbookWriter` makes: with inline strings, a committed row leaves
-**nothing** behind, and memory stays flat regardless of row count.
+same choice ExcelJS's `WorkbookWriter` makes: with inline strings, committed cell values need not remain in a global string table. Styles,
+comments, images, and other metadata can still remain until finalization.
 
 Set `useSharedStrings: true` if you want the deduplicated table (smaller output when the same
 strings repeat a lot): rows still stream — they carry the interned index — but the string table
@@ -197,8 +233,8 @@ Workbook metadata (`creator`, `created`, `title`, …, `properties.date1904`, `c
 ## Parity with the buffered writer
 
 For every in-scope feature, streamed output is asserted **structurally equal** to
-`writeWorkbookBuffer` with the same options (see `tests/xlsx/stream/parity.test.ts`), and the
-archive opens in Excel without repair. Two deliberate differences:
+`writeWorkbookBuffer` with the same options (see `tests/xlsx/stream/parity.test.ts`), using automated round-trip fixtures. This does not establish acceptance in a desktop Excel
+installation. Two deliberate differences:
 
 - `<dimension>` is omitted from streamed sheets (the sheet's extent isn't known until the last
   row); readers — including this library's — recompute it.
@@ -245,12 +281,16 @@ class WorkbookWriter implements AsyncIterable<Uint8Array> {
   addWorksheet(name?: string, options?: { state?: "visible" | "hidden" | "veryHidden" }): WorksheetWriter;
   addImage(options: AddImageOptions): number;   // register once, place per-sheet
   commit(): Promise<void>;                      // finalise the archive
+  abort(reason?: unknown): void;
+  ready(): Promise<void>;
+  readonly bufferedBytes: number;
   flush(): Promise<void>;                       // wait for destination backpressure
   // + doc metadata: creator, created, modified, title, …, properties, calcProperties, views
 }
 
 class WorksheetWriter {
-  addRow(values: RowValues): StreamedRow;       // StreamedRow = Row & { commit(): void }
+  addRow(values: RowValues): StreamedRow;       // also has commitAsync(): Promise<void>
+  addRowAsync(values: RowValues): Promise<void>;
   writeRows(rows: Iterable<RowValues> | AsyncIterable<RowValues>, options?: { flushEvery?: number }): Promise<void>;
   commit(): void;                               // finalise this sheet
   mergeCells(...args): void;

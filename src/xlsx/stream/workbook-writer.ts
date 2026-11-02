@@ -14,7 +14,11 @@
 // prototype (which keeps its buffered `workbook.xlsx` accessor).
 
 import { decodeAddress, Range } from "../../address/index.js";
-import { DuplicateWorksheetNameError, UnsupportedFeatureError } from "../../errors.js";
+import {
+  DuplicateWorksheetNameError,
+  ExportAbortedError,
+  UnsupportedFeatureError,
+} from "../../errors.js";
 import { assertFiniteScalar } from "../../model/cell-value.js";
 import type {
   AddImageOptions,
@@ -69,9 +73,12 @@ type SheetState = "visible" | "hidden" | "veryHidden";
 
 /** A row handed back by {@link WorksheetWriter.addRow}. It is a full model {@link Row} — set cell
  *  values/styles or row `height`/`hidden` on it — plus a `commit()` that flushes its XML to the sink. */
-export type StreamedRow = Row & { commit(): void };
+export type StreamedRow = Row & { commit(): void; commitAsync(): Promise<void> };
 
 export interface WorkbookWriterOptions {
+  signal?: AbortSignal;
+  highWaterMarkBytes?: number;
+  maxBufferedBytes?: number;
   /** A Node `Writable` (e.g. `fs.createWriteStream(path)`) to pipe the archive into. Mutually
    *  exclusive with {@link filename}; when neither is set the writer is itself an
    *  `AsyncIterable<Uint8Array>`. */
@@ -201,7 +208,22 @@ export class WorksheetWriter {
       this.commitRow(row);
       committed = true;
     };
+    row.commitAsync = async () => {
+      if (committed) throw new Error(`row ${number} is already committed`);
+      this.workbook.assertWritable();
+      await this.workbook.ready();
+      row.commit();
+      await this.workbook.ready();
+    };
     return row;
+  }
+
+  async addRowAsync(data: RowValues): Promise<void> {
+    this.workbook.assertWritable();
+    if (this.committed) throw new Error(`worksheet "${this.name}" is already committed`);
+    await this.workbook.ready();
+    this.addRow(data).commit();
+    await this.workbook.ready();
   }
 
   private commitRow(row: Row): void {
@@ -267,22 +289,45 @@ export class WorksheetWriter {
     return plan;
   }
 
-  /** Add and commit every row from `rows`, awaiting {@link WorkbookWriter.flush} every `flushEvery`
-   *  rows (default 10,000) so a huge sheet streams to a `filename`/`stream` destination with flat
-   *  memory instead of buffering the whole compressed archive. Accepts sync or async iterables, so a
-   *  DB cursor or generator can feed it directly. For per-row control (setting styles/notes before
-   *  commit) use {@link addRow} and periodic {@link WorkbookWriter.flush} instead. */
+  /** Add and commit rows in order, checking output capacity before requesting each row.
+   *  Also flushes Node/file output every `flushEvery` rows (default 10,000). For per-row styling,
+   *  use {@link addRow} followed by the row's `commitAsync()`. Use one producer at a time. */
   async writeRows(
     rows: Iterable<RowValues> | AsyncIterable<RowValues>,
     opts?: { flushEvery?: number },
   ): Promise<void> {
+    this.workbook.assertWritable();
     const flushEvery = opts?.flushEvery ?? 10_000;
     if (!Number.isSafeInteger(flushEvery) || flushEvery < 1)
       throw new RangeError("flushEvery must be a positive integer");
     let n = 0;
-    for await (const data of rows) {
-      this.addRow(data).commit();
-      if (++n % flushEvery === 0) await this.workbook.flush();
+    const iterator =
+      Symbol.asyncIterator in rows ? rows[Symbol.asyncIterator]() : rows[Symbol.iterator]();
+    let complete = false;
+    try {
+      for (;;) {
+        await this.workbook.ready();
+        this.workbook.assertWritable();
+        const next = await this.workbook.withCancellation(Promise.resolve(iterator.next()));
+        if (next.done) {
+          complete = true;
+          break;
+        }
+        await this.addRowAsync(next.value);
+        if (++n % flushEvery === 0) await this.workbook.flush();
+      }
+    } catch (error) {
+      this.workbook.abort(error);
+      throw error;
+    } finally {
+      if (!complete && iterator.return) {
+        // A generator waiting on external I/O may defer return(); do not block cancellation on it.
+        try {
+          void Promise.resolve(iterator.return()).catch(() => undefined);
+        } catch {
+          /* retain original failure */
+        }
+      }
     }
   }
 
@@ -365,8 +410,13 @@ export class WorkbookWriter implements AsyncIterable<Uint8Array> {
    *  and image pool, and take the sheet list explicitly). */
   private readonly meta = new Workbook();
   private readonly encoder = new TextEncoder();
-  private readonly sink = new QueueSink();
-  private readonly zip = new StreamingZip(this.sink);
+  private readonly sink: QueueSink;
+  private readonly zip: StreamingZip;
+  private readonly signal?: AbortSignal;
+  private finished = false;
+  private readonly onAbort = (): void => {
+    this.abort(this.signal?.reason);
+  };
   private readonly sharedStrings = createSharedStrings();
   private readonly styles = createStyles();
   private readonly cellStyles: Styles;
@@ -393,6 +443,24 @@ export class WorkbookWriter implements AsyncIterable<Uint8Array> {
   constructor(options?: WorkbookWriterOptions) {
     if (options?.filename !== undefined && options.stream !== undefined)
       throw new Error("filename and stream are mutually exclusive");
+    this.sink = new QueueSink(
+      options?.highWaterMarkBytes ??
+        Math.min(1024 * 1024, options?.maxBufferedBytes ?? 16 * 1024 * 1024),
+      options?.maxBufferedBytes,
+    );
+    this.zip = new StreamingZip(this.sink);
+    this.signal = options?.signal;
+    this.sink.onFailure(() => {
+      this.zip.abort();
+      this.signal?.removeEventListener("abort", this.onAbort);
+      options?.stream?.destroy();
+    });
+    this.sink.onComplete(() => {
+      if (!this.drain) {
+        this.finished = true;
+        this.signal?.removeEventListener("abort", this.onAbort);
+      }
+    });
     this.useSharedStrings = options?.useSharedStrings === true;
     this.useStyles = options?.useStyles !== false;
     // When styles are disabled, cells intern nothing (always `s=0`); styles.xml still ships its baseline.
@@ -400,6 +468,9 @@ export class WorkbookWriter implements AsyncIterable<Uint8Array> {
       ? this.styles
       : { addStyle: () => 0, addDxf: () => 0, toXml: this.styles.toXml.bind(this.styles) };
 
+    if (this.signal?.aborted) this.abort(this.signal.reason);
+    else this.signal?.addEventListener("abort", this.onAbort, { once: true });
+    if (this.signal?.aborted) return;
     if (options?.filename !== undefined) {
       this.drain = drainToFile(this.sink, options.filename);
     } else if (options?.stream !== undefined) {
@@ -512,6 +583,10 @@ export class WorkbookWriter implements AsyncIterable<Uint8Array> {
     this.zip.end();
     if (this.drain) await this.drain;
     this.sink.throwIfFailed();
+    if (this.drain) {
+      this.finished = true;
+      this.signal?.removeEventListener("abort", this.onAbort);
+    }
   }
 
   /** Await the background pump catching up: resolves once every chunk produced so far has been handed
@@ -519,11 +594,28 @@ export class WorkbookWriter implements AsyncIterable<Uint8Array> {
    *  the event loop, so without this the whole compressed archive accumulates in the sink's buffer
    *  until {@link commit}. Call it periodically in a large write loop — or use
    *  {@link WorksheetWriter.writeRows} — to keep peak memory flat. A no-op when the writer is consumed
-   *  as an `AsyncIterable` (the consumer drives draining) or once committed. */
+   *  as an `AsyncIterable` (the consumer drives draining). */
   async flush(): Promise<void> {
     this.sink.throwIfFailed();
-    if (this.committed || !this.drain) return;
+    if (!this.drain) return;
     await this.sink.whenDrained();
+  }
+
+  /** Compressed output queued or in flight to its single consumer. Excludes model/style/media data. */
+  get bufferedBytes(): number {
+    return this.sink.bufferedBytes;
+  }
+  async ready(): Promise<void> {
+    this.sink.throwIfFailed();
+    await this.sink.whenReady();
+    this.sink.throwIfFailed();
+  }
+  withCancellation<T>(operation: Promise<T>): Promise<T> {
+    return this.sink.withCancellation(operation);
+  }
+  abort(reason?: unknown): void {
+    if (this.finished) return;
+    this.sink.abort(reason instanceof ExportAbortedError ? reason : new ExportAbortedError(reason));
   }
 
   assertWritable(): void {
@@ -572,6 +664,7 @@ export class WorkbookWriter implements AsyncIterable<Uint8Array> {
   pushSheetChunk(xml: string, final = false): void {
     this.sink.throwIfFailed();
     this.zip.push(this.encoder.encode(xml), final);
+    this.sink.throwIfFailed();
   }
 
   addPart(path: string, xml: string): void {

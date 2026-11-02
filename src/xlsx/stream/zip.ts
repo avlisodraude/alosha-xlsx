@@ -64,4 +64,10 @@ export class StreamingZip {
     this.ended = true;
     this.zip.end();
   }
+
+  abort(): void {
+    this.ended = true;
+    this.current = undefined;
+    this.zip.terminate();
+  }
 }

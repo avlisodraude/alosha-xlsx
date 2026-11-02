@@ -7,8 +7,10 @@ import type { ImageExtension, Worksheet } from "../model/index.js";
 import { Workbook } from "../model/index.js";
 import { withModelReadBudget } from "../model/read-budget.js";
 import { readFileBytes } from "../platform/io.js";
-import { ModelReadBudget, type ReadLimits, resolveReadLimits } from "../read-limits.js";
+import { ModelReadBudget, resolveReadLimits } from "../read-limits.js";
+import { type ReadOptions, type WarningReporter, warningReporter } from "../read-options.js";
 import { IMAGE_CONTENT_TYPE, PART_PATH, REL_TYPE } from "./parts/constants.js";
+import { checkPartRoot, inspectImport } from "./read/diagnostics.js";
 import { parseDrawing } from "./read/drawing.js";
 import { openPackage, type PackageParts, type ResolvedRel } from "./read/package.js";
 import { applyAppProps, applyCoreProps } from "./read/props.js";
@@ -18,26 +20,34 @@ import { parseWorkbook } from "./read/workbook.js";
 import { parseWorksheet } from "./read/worksheet.js";
 
 /** Input/archive and model allocation limits; omitted limits use DEFAULT_READ_LIMITS. */
-export type ReadOptions = ReadLimits;
+export type { ReadOptions } from "../read-options.js";
 
 /** Parse a buffered `.xlsx` into a `Workbook`. Environment-agnostic (no `fs`); see `readWorkbookFile`. */
 export function readWorkbookBuffer(bytes: Uint8Array, options?: ReadOptions): Workbook {
+  const report = warningReporter(options);
   const budget = new ModelReadBudget(resolveReadLimits(options));
   const pkg = openPackage(bytes, options);
+  if (report) inspectImport(pkg, report);
   const rels = pkg.workbookRels();
 
   // The pooled parts, located by relationship type so a foreign producer's file names still resolve.
   let stylesXml: string | undefined;
   let sharedStringsXml: string | undefined;
   for (const { type, target } of rels.values()) {
-    if (type === REL_TYPE.styles) stylesXml = pkg.text(target);
-    else if (type === REL_TYPE.sharedStrings) sharedStringsXml = pkg.text(target);
+    if (type === REL_TYPE.styles) {
+      stylesXml = pkg.text(target);
+      if (stylesXml !== undefined) checkPartRoot(stylesXml, target, "styleSheet", report);
+    } else if (type === REL_TYPE.sharedStrings) {
+      sharedStringsXml = pkg.text(target);
+      if (sharedStringsXml !== undefined) checkPartRoot(sharedStringsXml, target, "sst", report);
+    }
   }
 
   const styles = parseStyles(stylesXml);
   const sharedStrings = sharedStringsXml !== undefined ? parseSharedStrings(sharedStringsXml) : [];
 
   const workbookXml = pkg.text(pkg.workbookPath()) ?? "";
+  checkPartRoot(workbookXml, pkg.workbookPath(), "workbook", report);
   const header = parseWorkbook(workbookXml);
 
   const wb = new Workbook();
@@ -53,14 +63,28 @@ export function readWorkbookBuffer(bytes: Uint8Array, options?: ReadOptions): Wo
   for (const sheet of header.sheets) {
     const ws = wb.addWorksheet(sheet.name, { state: sheet.state });
     const target = rels.get(sheet.rId)?.target;
-    if (target === undefined) continue;
+    if (target === undefined) {
+      report?.({
+        code: "UNRESOLVED_RELATIONSHIP",
+        part: pkg.workbookPath(),
+        feature: "worksheet",
+        ref: sheet.rId,
+        message: `Worksheet ${sheet.name} has no matching relationship`,
+      });
+      continue;
+    }
     const sheetXml = pkg.text(target);
     const sheetRels = pkg.partRels(target);
     withModelReadBudget(ws, budget, () => {
       if (sheetXml !== undefined) {
-        parseWorksheet(ws, sheetXml, { ...ctx, rels: sheetRels });
+        checkPartRoot(sheetXml, target, "worksheet", report);
+        parseWorksheet(ws, sheetXml, {
+          ...ctx,
+          rels: sheetRels,
+          report: report ? (warning) => report({ ...warning, part: target }) : undefined,
+        });
       }
-      applyDrawing(wb, ws, pkg, sheetRels, mediaCache);
+      applyDrawing(wb, ws, pkg, sheetRels, mediaCache, report);
     });
   }
 
@@ -93,6 +117,7 @@ function applyDrawing(
   pkg: PackageParts,
   sheetRels: Map<string, ResolvedRel>,
   mediaCache: Map<string, number>,
+  report?: WarningReporter,
 ): void {
   let drawingTarget: string | undefined;
   for (const rel of sheetRels.values()) {
@@ -113,11 +138,28 @@ function applyDrawing(
 
   for (const img of images) {
     const rel = drawingRels.get(img.embedId);
-    if (!rel || rel.mode === "External") continue;
+    if (!rel || rel.mode === "External") {
+      report?.({
+        code: "UNRESOLVED_RELATIONSHIP",
+        part: drawingTarget,
+        feature: "image",
+        ref: img.embedId,
+        message: "Image relationship is missing or external",
+      });
+      continue;
+    }
     const bytes = pkg.entry(rel.target);
     if (bytes === undefined) continue;
     const extension = imageExtensionOf(rel.target);
-    if (extension === undefined) continue;
+    if (extension === undefined) {
+      report?.({
+        code: "UNSUPPORTED_FEATURE",
+        part: rel.target,
+        feature: "image format",
+        message: "Image format is not supported",
+      });
+      continue;
+    }
 
     let imageId = mediaCache.get(rel.target);
     if (imageId === undefined) {
