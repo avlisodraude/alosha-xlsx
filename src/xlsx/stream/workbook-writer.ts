@@ -326,11 +326,16 @@ export class WorkbookWriter implements AsyncIterable<Uint8Array> {
     } else if (options?.stream !== undefined) {
       this.drain = drainToWritable(this.sink, options.stream);
     }
+    // Observe failures immediately, even if the caller has not reached commit() yet.
+    this.drain = this.drain?.catch((error: unknown) => {
+      this.sink.abort(error);
+    });
   }
 
   // --- worksheet lifecycle ----------------------------------------------------------------------
 
   addWorksheet(name?: string, options?: { state?: SheetState }): WorksheetWriter {
+    this.assertWritable();
     if (this.committed) throw new Error("workbook is already committed");
     const index = this.rels.length;
     const resolvedName = name ?? `Sheet${index + 1}`;
@@ -366,6 +371,7 @@ export class WorkbookWriter implements AsyncIterable<Uint8Array> {
   /** Finalise every part after the sheets: `[Content_Types]`, rels, styles, sharedStrings (if used),
    *  workbook + props, theme — then end the zip and (for a piped destination) await the flush. */
   async commit(): Promise<void> {
+    this.sink.throwIfFailed();
     if (this.committed) throw new Error("workbook is already committed");
     // Be forgiving if a caller forgot to commit a sheet (ExcelJS requires it explicitly).
     for (const ws of this.writers) {
@@ -424,6 +430,7 @@ export class WorkbookWriter implements AsyncIterable<Uint8Array> {
 
     this.zip.end();
     if (this.drain) await this.drain;
+    this.sink.throwIfFailed();
   }
 
   /** Await the background pump catching up: resolves once every chunk produced so far has been handed
@@ -433,8 +440,14 @@ export class WorkbookWriter implements AsyncIterable<Uint8Array> {
    *  {@link WorksheetWriter.writeRows} — to keep peak memory flat. A no-op when the writer is consumed
    *  as an `AsyncIterable` (the consumer drives draining) or once committed. */
   async flush(): Promise<void> {
+    this.sink.throwIfFailed();
     if (this.committed || !this.drain) return;
     await this.sink.whenDrained();
+  }
+
+  assertWritable(): void {
+    this.sink.throwIfFailed();
+    if (this.committed) throw new Error("workbook is already committed");
   }
 
   [Symbol.asyncIterator](): AsyncIterator<Uint8Array> {
@@ -476,6 +489,7 @@ export class WorkbookWriter implements AsyncIterable<Uint8Array> {
   }
 
   pushSheetChunk(xml: string, final = false): void {
+    this.sink.throwIfFailed();
     this.zip.push(this.encoder.encode(xml), final);
   }
 

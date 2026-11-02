@@ -26,7 +26,7 @@ export interface ByteSink {
  *  `node:*` and stays browser-safe. A real `fs.WriteStream`/`Writable` satisfies it structurally. */
 export interface NodeWritableLike {
   write(chunk: Uint8Array): boolean;
-  end(cb?: () => void): void;
+  end(cb?: (error?: Error | null) => void): void;
   once(event: string, listener: (arg?: unknown) => void): void;
   removeListener(event: string, listener: (arg?: unknown) => void): void;
   destroy(error?: Error): void;
@@ -42,11 +42,19 @@ export class QueueSink implements ByteSink, AsyncIterable<Uint8Array> {
     reject: (e: unknown) => void;
   };
   private done = false;
+  private failed = false;
   private failure?: unknown;
+  private outstanding = 0;
   /** Resolvers waiting on {@link whenDrained}; settled once the buffer empties (or the stream ends). */
-  private drainWaiters: Array<() => void> = [];
+  private drainWaiters: Array<{ resolve: () => void; reject: (error: unknown) => void }> = [];
+
+  throwIfFailed(): void {
+    if (this.failed) throw this.failure;
+  }
 
   write(chunk: Uint8Array): void {
+    this.throwIfFailed();
+    this.outstanding++;
     if (this.pending) {
       // Handed straight to a waiting consumer — never enters the queue, so the buffer stays empty.
       const p = this.pending;
@@ -68,7 +76,10 @@ export class QueueSink implements ByteSink, AsyncIterable<Uint8Array> {
   }
 
   abort(error: unknown): void {
+    if (this.failed) return;
+    this.failed = true;
     this.failure = error;
+    this.queue.length = 0;
     this.settleDrainWaiters();
     if (this.pending) {
       const p = this.pending;
@@ -81,30 +92,40 @@ export class QueueSink implements ByteSink, AsyncIterable<Uint8Array> {
    *  The writer's `flush()` awaits this so a caller can yield the event loop mid-write and let a
    *  background pump empty the queue, keeping peak memory flat instead of buffering the whole archive. */
   whenDrained(): Promise<void> {
-    if (this.queue.length === 0 || this.done || this.failure !== undefined) {
+    if (this.failed) return Promise.reject(this.failure);
+    if (this.outstanding === 0) {
       return Promise.resolve();
     }
-    return new Promise<void>((resolve) => {
-      this.drainWaiters.push(resolve);
+    return new Promise<void>((resolve, reject) => {
+      this.drainWaiters.push({ resolve, reject });
     });
   }
 
+  /** Called by the destination pump after a chunk has been accepted, including backpressure. */
+  acknowledge(): void {
+    this.outstanding--;
+    if (this.outstanding === 0) this.settleDrainWaiters();
+  }
+
   private settleDrainWaiters(): void {
+    if (!this.failed && this.outstanding !== 0) return;
     if (this.drainWaiters.length === 0) return;
     const waiters = this.drainWaiters;
     this.drainWaiters = [];
-    for (const resolve of waiters) resolve();
+    for (const waiter of waiters) {
+      if (this.failed) waiter.reject(this.failure);
+      else waiter.resolve();
+    }
   }
 
   [Symbol.asyncIterator](): AsyncIterator<Uint8Array> {
     return {
       next: (): Promise<IteratorResult<Uint8Array>> => {
+        if (this.failed) return Promise.reject(this.failure);
         if (this.queue.length > 0) {
           const chunk = this.queue.shift() as Uint8Array;
-          if (this.queue.length === 0) this.settleDrainWaiters();
           return Promise.resolve({ value: chunk, done: false });
         }
-        if (this.failure !== undefined) return Promise.reject(this.failure);
         if (this.done) return Promise.resolve({ value: undefined, done: true });
         return new Promise((resolve, reject) => {
           this.pending = { resolve, reject };
@@ -120,37 +141,62 @@ export async function drainToWritable(
   source: AsyncIterable<Uint8Array>,
   writable: NodeWritableLike,
 ): Promise<void> {
-  for await (const chunk of source) {
-    if (!writable.write(chunk)) {
-      // Await "drain", removing BOTH listeners on either outcome. A backpressured write that resolves
-      // via "drain" must not leave its "error" listener attached, or they accumulate one per chunk and
-      // trip Node's MaxListenersExceededWarning on a long, frequently-draining write.
-      await new Promise<void>((resolve, reject) => {
-        const onDrain = (): void => {
-          cleanup();
-          resolve();
-        };
-        const onError = (e?: unknown): void => {
-          cleanup();
-          reject(e);
-        };
-        const cleanup = (): void => {
-          writable.removeListener("drain", onDrain);
-          writable.removeListener("error", onError);
-        };
-        writable.once("drain", onDrain);
-        writable.once("error", onError);
-      });
-    }
-  }
-  await new Promise<void>((resolve, reject) => {
-    const onError = (e?: unknown): void => reject(e);
-    writable.once("error", onError);
-    writable.end(() => {
-      writable.removeListener("error", onError);
-      resolve();
-    });
+  let rejectFailure!: (error: unknown) => void;
+  let finished = false;
+  const failure = new Promise<never>((_resolve, reject) => {
+    rejectFailure = reject;
   });
+  const onError = (error?: unknown): void => {
+    rejectFailure(error);
+  };
+  const onClose = (): void => {
+    if (!finished) rejectFailure(new Error("export destination closed before completion"));
+  };
+  // Watch the whole lifecycle, including periods when the producer has supplied no bytes yet.
+  writable.once("error", onError);
+  writable.once("close", onClose);
+  const iterator = source[Symbol.asyncIterator]();
+  try {
+    for (;;) {
+      const item = await Promise.race([iterator.next(), failure]);
+      if (item.done) break;
+      if (!writable.write(item.value)) {
+        let onDrain!: () => void;
+        try {
+          await Promise.race([
+            new Promise<void>((resolve) => {
+              onDrain = resolve;
+              writable.once("drain", onDrain);
+            }),
+            failure,
+          ]);
+        } finally {
+          writable.removeListener("drain", onDrain);
+        }
+      }
+      if (source instanceof QueueSink) source.acknowledge();
+    }
+    await Promise.race([
+      new Promise<void>((resolve) => {
+        writable.end((error) => {
+          if (error) {
+            rejectFailure(error);
+            return;
+          }
+          finished = true;
+          resolve();
+        });
+      }),
+      failure,
+    ]);
+  } catch (error) {
+    if (source instanceof QueueSink) source.abort(error);
+    writable.destroy();
+    throw error;
+  } finally {
+    writable.removeListener("error", onError);
+    writable.removeListener("close", onClose);
+  }
 }
 
 /** Pump an async byte stream to a file. The sole `node:fs` touch in the streaming writer — imported
