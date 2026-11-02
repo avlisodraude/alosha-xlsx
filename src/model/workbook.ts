@@ -3,6 +3,7 @@
 // `orderNo` is kept equal to the array index; the deprecated tabColor-as-string branch is dropped.
 
 import { DuplicateWorksheetNameError } from "../errors.js";
+import type { XlsxAccessor } from "../xlsx-accessor.js";
 import { type AddImageOptions, ImageRegistry, type WorkbookImage } from "./image.js";
 import {
   type AddWorksheetOptions,
@@ -58,6 +59,8 @@ export interface WorkbookModel {
 }
 
 export class Workbook {
+  /** Installed by the package entry; declared here so packed declarations retain the property. */
+  declare readonly xlsx: XlsxAccessor;
   creator?: string;
   lastModifiedBy?: string;
   created: Date;
