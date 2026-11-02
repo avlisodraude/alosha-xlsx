@@ -3,6 +3,8 @@
 // concatenate strings rather than pulling in a DOM/XML library. No streaming, no validation — the
 // callers know the schema.
 
+import { encodeXString, isXStringAttribute, isXStringElement } from "./xstring.js";
+
 /** Emitted at the head of every part unless `declaration: false` is passed. */
 const XML_DECLARATION = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
 
@@ -69,27 +71,28 @@ export class XmlWriter {
   }
 
   /** Serialize an attribute record, omitting `undefined`/`null` and rendering booleans as `1`/`0`. */
-  private renderAttrs(attrs?: Record<string, AttrValue>): string {
+  private renderAttrs(attrs?: Record<string, AttrValue>, tag = ""): string {
     if (!attrs) return "";
     let out = "";
     for (const key of Object.keys(attrs)) {
       const value = attrs[key];
       if (value === undefined || value === null) continue;
       const raw = typeof value === "boolean" ? (value ? "1" : "0") : String(value);
-      out += ` ${key}="${escapeXmlAttr(raw)}"`;
+      const encoded = isXStringAttribute(tag, key) ? encodeXString(raw) : raw;
+      out += ` ${key}="${escapeXmlAttr(encoded)}"`;
     }
     return out;
   }
 
   /** Open an element: `<tag …>`. */
   open(tag: string, attrs?: Record<string, AttrValue>): this {
-    this.buffer += `<${tag}${this.renderAttrs(attrs)}>`;
+    this.buffer += `<${tag}${this.renderAttrs(attrs, tag)}>`;
     return this;
   }
 
   /** Self-closing element with attributes only: `<tag …/>`. */
   leaf(tag: string, attrs?: Record<string, AttrValue>): this {
-    this.buffer += `<${tag}${this.renderAttrs(attrs)}/>`;
+    this.buffer += `<${tag}${this.renderAttrs(attrs, tag)}/>`;
     return this;
   }
 
@@ -98,7 +101,8 @@ export class XmlWriter {
   el(tag: string, text: string, attrs?: Record<string, AttrValue>): this {
     const finalAttrs =
       tag === "t" && needsWhitespacePreserve(text) ? { "xml:space": "preserve", ...attrs } : attrs;
-    this.buffer += `<${tag}${this.renderAttrs(finalAttrs)}>${escapeXmlText(text)}</${tag}>`;
+    const encoded = isXStringElement(tag) ? encodeXString(text) : text;
+    this.buffer += `<${tag}${this.renderAttrs(finalAttrs, tag)}>${escapeXmlText(encoded)}</${tag}>`;
     return this;
   }
 

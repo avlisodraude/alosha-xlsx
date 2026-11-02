@@ -126,9 +126,9 @@ describe("parseXml", () => {
     ]);
   });
 
-  it("decodes the _xHHHH_ escape token inside attribute values", () => {
-    expect(events('<a b="x_x000B_y"/>')).toEqual([
-      { kind: "open", name: "a", attrs: { b: "x\x0By" }, selfClosing: true },
+  it("decodes the _xHHHH_ escape token in OOXML string attributes", () => {
+    expect(events('<numFmt formatCode="x_x000B_y"/>')).toEqual([
+      { kind: "open", name: "numFmt", attrs: { formatCode: "x\x0By" }, selfClosing: true },
     ]);
   });
 

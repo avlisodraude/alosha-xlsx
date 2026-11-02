@@ -99,18 +99,36 @@ const bytes: Uint8Array = writeWorkbookBuffer(wb); // sync
 const roundTripped: Workbook = readWorkbookBuffer(bytes); // sync
 ```
 
-Node-only file variants (`writeWorkbookFile`, `readWorkbookFile`) are also exported; they lazily
-import `node:fs/promises` so browser bundles that only use the buffer functions never pull it in.
+Node-only file variants (`writeWorkbookFile`, `readWorkbookFile`) are also exported. Bundlers select
+the browser build automatically; buffer and async-iterable APIs require no Node filesystem polyfills.
+File APIs in that build reject with `UnsupportedFeatureError`.
 
 `writeWorkbookBuffer` accepts a `WriteOptions` (`useSharedStrings`, `useStyles`); the read
-functions accept a `ReadOptions` (reserved for future use).
+functions accept `ReadOptions` with configurable ZIP allocation limits.
+
+Reads default to 128 MiB of compressed input, 10,000 ZIP entries, 256 MiB per expanded entry,
+and 1 GiB of total expanded entries. Override these for larger trusted workbooks:
+
+```ts
+await workbook.xlsx.load(bytes, {
+  maxInputBytes: 256 * 1024 * 1024,
+  maxEntries: 20_000,
+  maxEntryBytes: 512 * 1024 * 1024,
+  maxTotalBytes: 2 * 1024 * 1024 * 1024,
+});
+```
+
+Each limit accepts `Infinity` to disable it. Exceeding a budget throws `ReadLimitError` with
+`code: "READ_LIMIT_EXCEEDED"`, `limit`, `maximum`, and `actual`. These options also work with
+`readFile`, byte-stream `read`, and the free functions; streamed input stops at `maxInputBytes`.
+The limits bound ZIP byte allocations, not the memory occupied by the resulting workbook model.
 
 ## Streaming writes for large workbooks
 
 For exports too big to hold in memory, the streaming `WorkbookWriter` (ExcelJS's
 `stream.xlsx.WorkbookWriter` shape) renders and deflates each row into the output archive as you
 commit it, keeping peak memory roughly flat regardless of row count — at 500k rows × 5 cols it
-uses **~15.6× less peak memory** than the buffered writer at **~1.9× the throughput**
+used **~14.2× less peak memory** than the buffered writer at **~1.9× the throughput** in the published benchmark
 ([benchmarks](https://github.com/avlisodraude/alosha-xlsx/blob/main/BENCHMARKS.md)):
 
 ```ts
@@ -118,9 +136,12 @@ import { WorkbookWriter } from "@alosha/xlsx";
 
 const wb = new WorkbookWriter({ filename: "big-report.xlsx" });
 const ws = wb.addWorksheet("Data");
-for (const record of hugeDataset) {
-  ws.addRow([record.id, record.name, record.amount]).commit(); // flushed now
+async function* exportRows() {
+  for await (const record of hugeDataset) {
+    yield [record.id, record.name, record.amount];
+  }
 }
+await ws.writeRows(exportRows()); // yields to the destination every 10,000 rows
 ws.commit();
 await wb.commit();
 ```
@@ -129,9 +150,15 @@ Instead of a `filename`, pass a Node `Writable` (`{ stream: res }`) — or pass 
 writer itself is an `AsyncIterable<Uint8Array>` of archive chunks (browser/edge-safe). Strings
 default to inline (`useSharedStrings: false`) so committed rows retain nothing. Styles, merges,
 panes/auto-filter, column widths, hyperlinks, data validation, conditional formatting, comments, and
-images all stream with buffered-writer parity; a streaming *reader* is not supported yet. See
+images all stream; a streaming *reader* is not supported yet. See
 [`docs/STREAMING.md`](https://github.com/avlisodraude/alosha-xlsx/blob/main/docs/STREAMING.md)
-for the full guide.
+for the full guide. For a manual `addRow().commit()` loop, call `await wb.flush()` periodically:
+without an await point, compressed output accumulates until the loop finishes.
+
+Streaming shared-formula masters must declare `shareType: "shared"`, `formula`, and a complete
+`ref` before their slaves are committed. Array masters require `shareType: "array"`, `formula`,
+and `ref`. Undeclared shared masters are rejected rather than producing an empty formula.
+Commit rows once, in creation order, before committing the worksheet.
 
 ## Feature matrix
 
@@ -153,7 +180,7 @@ for the full guide.
 | Hyperlink cells (external URL/mailto) | ✅ | ✅ | real OOXML relationship, round-trips as `{ text, hyperlink, tooltip? }`; internal `location=` links deferred |
 | Data validation (dropdowns, constraints) | ✅ | ✅ | same-sheet ranges and inline lists; cross-sheet list refs deferred |
 | Conditional formatting (`cellIs`, `expression`, text-contains family, `top10`, `aboveAverage`/`belowAverage`, `duplicateValues`/`uniqueValues`, `colorScale`, `dataBar`, `iconSet`) | ✅ | ✅ | differential styles dedup into a `<dxfs>` pool; x14 dataBar gradient/axis/negative-fill, `timePeriod` rules, and custom iconSet icons deferred |
-| Streaming write (`WorkbookWriter`) | ❌ | ✅ | bounded-memory row-by-row writes, full feature parity with the buffered writer; streaming read deferred — see [`docs/STREAMING.md`](https://github.com/avlisodraude/alosha-xlsx/blob/main/docs/STREAMING.md) |
+| Streaming write (`WorkbookWriter`) | ❌ | ✅ | row-by-row writes with explicit shared/array formula groups; streaming read deferred — see [`docs/STREAMING.md`](https://github.com/avlisodraude/alosha-xlsx/blob/main/docs/STREAMING.md) |
 | Embedded images (`workbook.addImage` + `worksheet.addImage`) | ✅ | ✅ | two-cell and one-cell/pixel-extent anchors; cropping/rotation, background/header-footer images, SVG, and EMF/WMF deferred |
 | Charts | ❌ | ❌ | deferred |
 | Comments (`cell.note`) | ✅ | ✅ | note/author table (`comments{n}.xml`) + legacy VML anchor (`vmlDrawing{n}.vml`); threaded/modern comments and box geometry deferred |
@@ -191,8 +218,7 @@ behavioural notes to check before porting.
   round-trip as real OOXML relationships (`{ text, hyperlink, tooltip? }`). Links to a location
   within the same workbook (ExcelJS's `location="Sheet2!A1"` form, no external relationship) aren't
   written or read yet.
-- **Streaming is write-only.** The streaming `WorkbookWriter` covers writes, with full feature
-  parity with the buffered writer including column widths
+- **Streaming is write-only.** The streaming `WorkbookWriter` supports the sheet features above, including column widths
   ([`docs/STREAMING.md`](https://github.com/avlisodraude/alosha-xlsx/blob/main/docs/STREAMING.md));
   reading is still buffer-based (the whole workbook lives in memory) — a streaming `WorkbookReader`
   is deferred, and so `ExcelJS.stream.xlsx.WorkbookReader` in `@alosha/xlsx/compat` still throws
@@ -234,6 +260,7 @@ pnpm test:watch   # run tests in watch mode
 pnpm lint         # lint + format check with Biome
 pnpm format       # auto-format with Biome
 pnpm typecheck    # type-check with tsc
+pnpm test:package # after build: packed ESM/CJS, downstream types, browser consumers
 ```
 
 ### A note on `pnpm install` warnings

@@ -196,6 +196,7 @@ export class Worksheet implements WorksheetHost {
   private _name: string;
 
   private readonly _rows = new Map<number, Row>();
+  private _highestRow = 0;
   private readonly _columns = new Map<number, Column>();
   private readonly _columnsByKey = new Map<string, Column>();
   /** Active merge regions keyed by their master (top-left) cell address. */
@@ -250,6 +251,7 @@ export class Worksheet implements WorksheetHost {
     if (!r) {
       r = new Row(this, row);
       this._rows.set(row, r);
+      if (row > this._highestRow) this._highestRow = row;
     }
     return r;
   }
@@ -317,6 +319,7 @@ export class Worksheet implements WorksheetHost {
     for (const [num, row] of this._rows) snapshots.set(num, this.snapshotRow(row));
 
     this._rows.clear();
+    this._highestRow = 0;
     this._merges.clear();
 
     for (const [num, snap] of snapshots) {
@@ -428,9 +431,7 @@ export class Worksheet implements WorksheetHost {
   }
 
   get rowCount(): number {
-    let max = 0;
-    for (const n of this._rows.keys()) if (n > max) max = n;
-    return max;
+    return this._highestRow;
   }
 
   get actualRowCount(): number {
@@ -797,6 +798,7 @@ export class Worksheet implements WorksheetHost {
     }));
 
     this._rows.clear();
+    this._highestRow = 0;
     this._columns.clear();
     this._columnsByKey.clear();
     this._merges.clear();

@@ -3,6 +3,8 @@
 // rather than pulling in a DOM/SAX library. Not a general XML engine — it targets the well-formed
 // subset Excel/LibreOffice/our own writer emit (no DTDs, no external entities).
 
+import { decodeXString, isXStringAttribute, isXStringElement } from "./xstring.js";
+
 /** One token from the document in source order. Prefixed names are kept verbatim ("r:id",
  *  "cp:coreProperties") — OOXML fixes its namespace prefixes, so literal matching is sufficient. */
 export type XmlEvent =
@@ -18,7 +20,7 @@ const NAMED_ENTITIES: Record<string, string> = {
   apos: "'",
 };
 
-const ENTITY_OR_ESCAPE_RE = /&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);|_x([0-9A-Fa-f]{4})_/g;
+const ENTITY_OR_ESCAPE_RE = /&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);/g;
 
 /** `String.fromCodePoint` throws `RangeError` for code points beyond the Unicode range or lone
  *  surrogate halves — both reachable via a crafted `&#nn;`/`&#xhh;` reference — so callers must
@@ -27,31 +29,25 @@ function isValidCodePoint(code: number): boolean {
   return Number.isFinite(code) && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff);
 }
 
-/** Decodes the five named XML entities, numeric `&#nn;`/`&#xhh;` references, and Excel's `_xHHHH_`
- *  escape token (used by our own writer — see xml-writer.ts — to round-trip characters illegal in XML
- *  1.0). Unknown entities and out-of-range numeric references are left untouched (better a literal
+/** Decodes the five named XML entities and numeric `&#nn;`/`&#xhh;` references. ST_Xstring escapes
+ *  are decoded separately, only in OOXML string fields. Unknown entities and out-of-range numeric
+ *  references are left untouched (better a literal
  *  `&foo;` survive than we silently drop it or throw on a crafted/corrupt part). */
 function decodeEntities(s: string): string {
-  if (!s.includes("&") && !s.includes("_x")) return s;
-  return s.replace(
-    ENTITY_OR_ESCAPE_RE,
-    (match, ent: string | undefined, hex: string | undefined) => {
-      if (hex !== undefined) {
-        return String.fromCharCode(Number.parseInt(hex, 16));
-      }
-      if (ent === undefined) return match;
-      if (ent.startsWith("#x") || ent.startsWith("#X")) {
-        const code = Number.parseInt(ent.slice(2), 16);
-        return isValidCodePoint(code) ? String.fromCodePoint(code) : match;
-      }
-      if (ent.startsWith("#")) {
-        const code = Number.parseInt(ent.slice(1), 10);
-        return isValidCodePoint(code) ? String.fromCodePoint(code) : match;
-      }
-      const named = NAMED_ENTITIES[ent];
-      return named !== undefined ? named : match;
-    },
-  );
+  if (!s.includes("&")) return s;
+  return s.replace(ENTITY_OR_ESCAPE_RE, (match, ent: string | undefined) => {
+    if (ent === undefined) return match;
+    if (ent.startsWith("#x") || ent.startsWith("#X")) {
+      const code = Number.parseInt(ent.slice(2), 16);
+      return isValidCodePoint(code) ? String.fromCodePoint(code) : match;
+    }
+    if (ent.startsWith("#")) {
+      const code = Number.parseInt(ent.slice(1), 10);
+      return isValidCodePoint(code) ? String.fromCodePoint(code) : match;
+    }
+    const named = NAMED_ENTITIES[ent];
+    return named !== undefined ? named : match;
+  });
 }
 
 function isSpace(c: string | undefined): boolean {
@@ -100,7 +96,8 @@ function parseOpenTag(inner: string): { name: string; attrs: Record<string, stri
       j++;
       const valStart = j;
       while (j < len && inner[j] !== quote) j++;
-      attrs[attrName] = decodeEntities(inner.slice(valStart, j));
+      const raw = decodeEntities(inner.slice(valStart, j));
+      attrs[attrName] = isXStringAttribute(name, attrName) ? decodeXString(raw) : raw;
       j++; // skip closing quote
       i = j;
     } else {
@@ -118,6 +115,7 @@ function parseOpenTag(inner: string): { name: string; attrs: Record<string, stri
 export function* parseXml(xml: string): Generator<XmlEvent> {
   const len = xml.length;
   let i = 0;
+  const elements: string[] = [];
 
   while (i < len) {
     if (xml[i] === "<") {
@@ -146,6 +144,7 @@ export function* parseXml(xml: string): Generator<XmlEvent> {
       if (xml[i + 1] === "/") {
         const end = xml.indexOf(">", i + 2);
         const name = xml.slice(i + 2, end === -1 ? len : end).trim();
+        elements.pop();
         i = end === -1 ? len : end + 1;
         yield { kind: "close", name };
         continue;
@@ -155,6 +154,7 @@ export function* parseXml(xml: string): Generator<XmlEvent> {
       const selfClosing = xml[tagEnd - 1] === "/";
       const inner = xml.slice(i + 1, selfClosing ? tagEnd - 1 : tagEnd);
       const { name, attrs } = parseOpenTag(inner);
+      if (!selfClosing) elements.push(name);
       i = tagEnd === len ? len : tagEnd + 1;
       yield { kind: "open", name, attrs, selfClosing };
       continue;
@@ -163,7 +163,13 @@ export function* parseXml(xml: string): Generator<XmlEvent> {
     const next = xml.indexOf("<", i);
     const raw = next === -1 ? xml.slice(i) : xml.slice(i, next);
     i = next === -1 ? len : next;
-    if (raw.length > 0) yield { kind: "text", text: decodeEntities(raw) };
+    if (raw.length > 0) {
+      const text = decodeEntities(raw);
+      yield {
+        kind: "text",
+        text: isXStringElement(elements[elements.length - 1] ?? "") ? decodeXString(text) : text,
+      };
+    }
   }
 }
 

@@ -16,6 +16,7 @@ import type {
   ConditionalFormatting,
   ConditionalRule,
   DataValidationModel,
+  WorksheetProperties,
   WorksheetView,
 } from "../../model/index.js";
 import {
@@ -27,7 +28,7 @@ import {
 } from "../../model/index.js";
 import { XmlWriter } from "../../xml/index.js";
 import { dateToSerial } from "../date.js";
-import type { SharedStrings } from "../shared-strings.js";
+import { renderRunProps, type SharedStrings } from "../shared-strings.js";
 import type { Styles } from "../styles.js";
 import { type CommentRecord, renderComments } from "./comments.js";
 import type { WorksheetRel } from "./constants.js";
@@ -106,6 +107,35 @@ export interface HyperlinkRecord {
  *  than the raw serial. Built-in id 14, so it adds no custom `<numFmt>` entry. */
 const DEFAULT_DATE_NUMFMT = "mm-dd-yy";
 
+/** Shared by buffered and streaming writers; sheetPr precedes dimension/views. */
+export function renderSheetProperties(w: XmlWriter, properties: WorksheetProperties): void {
+  const color = properties.tabColor;
+  if (!color) return;
+  w.open("sheetPr");
+  w.leaf("tabColor", { rgb: color.argb, theme: color.theme, indexed: color.indexed });
+  w.close("sheetPr");
+}
+
+export function renderSheetFormatPr(w: XmlWriter, properties: WorksheetProperties): void {
+  const descent = properties.dyDescent !== 55 ? properties.dyDescent : undefined;
+  w.leaf("sheetFormatPr", {
+    defaultRowHeight: properties.defaultRowHeight ?? 15,
+    defaultColWidth: properties.defaultColWidth,
+    outlineLevelRow: properties.outlineLevelRow || undefined,
+    outlineLevelCol: properties.outlineLevelCol || undefined,
+    "xmlns:x14ac":
+      descent !== undefined
+        ? "http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac"
+        : undefined,
+    "xmlns:mc":
+      descent !== undefined
+        ? "http://schemas.openxmlformats.org/markup-compatibility/2006"
+        : undefined,
+    "mc:Ignorable": descent !== undefined ? "x14ac" : undefined,
+    "x14ac:dyDescent": descent,
+  });
+}
+
 export function renderWorksheet(ws: Worksheet, ctx: WorksheetContext): RenderedWorksheet {
   // Sheet-level metadata only — rows are pulled lazily below (ws.rowModelsInOrder) so a large sheet
   // never has its whole cell set snapshotted into a WorksheetModel at once. That snapshot used to be
@@ -114,14 +144,13 @@ export function renderWorksheet(ws: Worksheet, ctx: WorksheetContext): RenderedW
   const w = new XmlWriter();
   w.open("worksheet", { xmlns: NS.spreadsheetml, "xmlns:r": NS.relationships });
 
+  renderSheetProperties(w, model.properties);
+
   w.leaf("dimension", { ref: ws.dimensions.range });
 
   renderSheetViews(w, model.views, model.properties.showGridLines);
 
-  w.leaf("sheetFormatPr", {
-    defaultRowHeight: model.properties.defaultRowHeight ?? 15,
-    defaultColWidth: model.properties.defaultColWidth,
-  });
+  renderSheetFormatPr(w, model.properties);
 
   // One rId source and one extra-parts accumulator for the whole sheet — hyperlinks are the first
   // rel contributor; Tracks C/D push more rels + parts through the same seam without colliding.
@@ -131,8 +160,7 @@ export function renderWorksheet(ws: Worksheet, ctx: WorksheetContext): RenderedW
   const hyperlinks: HyperlinkRecord[] = [];
   renderCols(w, model.columns, ctx);
   // Shared/array formula groups need one si per master and a slave→master si match; both require a
-  // whole-sheet view, so plan them up front (buffered path only — the streaming writer, which flushes
-  // one row at a time, has no such view and renders each formula stand-alone).
+  // whole-sheet view, so plan them up front. The streaming writer instead requires explicit groups.
   const sharedFormulas = planSharedFormulas(ws.rowModelsInOrder());
   renderSheetData(w, ws.rowModelsInOrder(), ctx, hyperlinks, sharedFormulas);
   // CT_Worksheet order: `<autoFilter>` sits after `<sheetData>`, before `<mergeCells>`;
@@ -369,9 +397,18 @@ function richTextCell(r: string, s: number, value: RichText, ctx: WorksheetConte
   if (ctx.useSharedStrings) {
     return valueCell(r, s, "s", String(ctx.sharedStrings.add(value)));
   }
-  // Inline fallback flattens the runs to plain text (formatting survives only via shared strings).
-  const text = value.richText.map((run) => run.text).join("");
-  return stringCell(r, s, text, { ...ctx, useSharedStrings: false });
+  const w = new XmlWriter({ declaration: false });
+  w.open("c", { r, s: s !== 0 ? s : undefined, t: "inlineStr" });
+  w.open("is");
+  for (const run of value.richText) {
+    w.open("r");
+    w.raw(renderRunProps(run.font));
+    w.el("t", run.text);
+    w.close("r");
+  }
+  w.close("is");
+  w.close("c");
+  return w.toString();
 }
 
 /** How one formula cell should serialize its `<f>` — its OOXML type, and (for shared/array masters) the
@@ -385,7 +422,7 @@ interface SharedFormulaRender {
   /** A master carries the expression + `ref`; a shared slave carries only `t`+`si` (no expression). */
   isMaster: boolean;
 }
-type SharedFormulaPlan = Map<string, SharedFormulaRender>;
+export type SharedFormulaPlan = Map<string, SharedFormulaRender>;
 
 /** Plan the `<f>` attributes for every formula cell in a sheet, mirroring ExcelJS's `prepare` pass
  *  (node_modules/exceljs/lib/xlsx/xform/sheet/cell-xform.js): allocate one `si` per shared master and

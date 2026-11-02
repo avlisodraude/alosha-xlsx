@@ -13,7 +13,8 @@
 // pool is small and stays resident. This is a standalone constructor, deliberately off the `Workbook`
 // prototype (which keeps its buffered `workbook.xlsx` accessor).
 
-import { DuplicateWorksheetNameError } from "../../errors.js";
+import { decodeAddress, Range } from "../../address/index.js";
+import { DuplicateWorksheetNameError, UnsupportedFeatureError } from "../../errors.js";
 import type {
   AddImageOptions,
   Column,
@@ -21,11 +22,13 @@ import type {
   ConditionalFormatting,
   DataValidations,
   ImageAnchor,
+  RowModel,
   RowValues,
   WorksheetImage,
   WorksheetView,
 } from "../../model/index.js";
-import { Row, Workbook, Worksheet } from "../../model/index.js";
+import { CellType, Row, Workbook, Worksheet } from "../../model/index.js";
+import { validateWorksheetNameFormat } from "../../model/worksheet.js";
 import { XmlWriter } from "../../xml/index.js";
 import { renderAppProps } from "../parts/app-props.js";
 import type { SheetRel, WorkbookRel } from "../parts/constants.js";
@@ -49,7 +52,10 @@ import {
   renderMergeCells,
   renderRowXml,
   renderSheetComments,
+  renderSheetFormatPr,
+  renderSheetProperties,
   renderSheetViews,
+  type SharedFormulaPlan,
   type WorksheetContext,
 } from "../parts/worksheet.js";
 import { renderWorksheetRels } from "../parts/worksheet-rels.js";
@@ -93,6 +99,9 @@ export class WorksheetWriter {
   private readonly sheet: Worksheet;
   private readonly hyperlinks: HyperlinkRecord[] = [];
   private rowCount = 0;
+  private lastCommittedRow = 0;
+  private readonly sharedMasters = new Map<string, { si: number; range: Range }>();
+  private nextSharedIndex = 0;
   private started = false;
   private committed = false;
 
@@ -177,21 +186,79 @@ export class WorksheetWriter {
   /** Build the next row from `data`; its XML is deflated to the sink when you call `.commit()`. Set
    *  cell styles, and `cell.note` comments, on the returned row before committing it. */
   addRow(data: RowValues): StreamedRow {
+    this.workbook.assertWritable();
     if (this.committed) throw new Error(`worksheet "${this.name}" is already committed`);
     const number = ++this.rowCount;
     // Host the transient row on the model worksheet so styles/comments/validations resolve, but never
     // register it (no `getRow`/`addRow` on the model) — the row body is not retained.
     const row = new Row(this.sheet, number) as StreamedRow;
     row.values = data;
-    row.commit = () => this.commitRow(row);
+    let committed = false;
+    row.commit = () => {
+      if (committed) throw new Error(`row ${number} is already committed`);
+      this.commitRow(row);
+      committed = true;
+    };
     return row;
   }
 
   private commitRow(row: Row): void {
+    this.workbook.assertWritable();
     if (this.committed) throw new Error(`worksheet "${this.name}" is already committed`);
+    if (row.number !== this.lastCommittedRow + 1) throw new Error("commit rows in creation order");
     this.ensureStarted();
-    const xml = renderRowXml(row.model, this.workbook.context, this.hyperlinks);
+    const model = row.model;
+    const formulas = this.planFormulas(model);
+    const xml = renderRowXml(model, this.workbook.context, this.hyperlinks, formulas);
     if (xml.length > 0) this.workbook.pushSheetChunk(xml);
+    this.lastCommittedRow = row.number;
+    // Only active, explicitly declared groups are retained; ordinary formulas retain no state.
+    for (const [address, master] of this.sharedMasters) {
+      if (master.range.bottom <= row.number) this.sharedMasters.delete(address);
+    }
+  }
+
+  private planFormulas(row: RowModel): SharedFormulaPlan {
+    const plan: SharedFormulaPlan = new Map();
+    const added: Array<[string, { si: number; range: Range }]> = [];
+    // Stage new masters so a rejected row can be corrected and retried without poisoning the plan.
+    const masters = new Map(this.sharedMasters);
+    for (const cell of row.cells) {
+      if (cell.type !== CellType.Formula) continue;
+      if (cell.shareType === "shared" || cell.shareType === "array") {
+        if (!cell.ref || !cell.formula)
+          throw new UnsupportedFeatureError(
+            "streamed shared/array formula masters require formula and ref",
+          );
+        const range = new Range(cell.ref);
+        if (range.tl !== cell.address)
+          throw new UnsupportedFeatureError(
+            "streamed formula master must be the top-left cell of ref",
+          );
+        const si = this.nextSharedIndex + added.length;
+        plan.set(cell.address, {
+          t: cell.shareType,
+          si: cell.shareType === "shared" ? si : undefined,
+          ref: cell.ref,
+          isMaster: true,
+        });
+        if (cell.shareType === "shared") {
+          const state = { si, range };
+          masters.set(cell.address, state);
+          added.push([cell.address, state]);
+        }
+      } else if (cell.sharedFormula !== undefined) {
+        const master = masters.get(decodeAddress(cell.sharedFormula).address);
+        if (!master?.range.contains(cell.address))
+          throw new UnsupportedFeatureError(
+            "streamed shared formula requires a preceding master with shareType: shared and a containing ref",
+          );
+        plan.set(cell.address, { t: "shared", si: master.si, isMaster: false });
+      }
+    }
+    for (const [address, master] of added) this.sharedMasters.set(address, master);
+    this.nextSharedIndex += added.length;
+    return plan;
   }
 
   /** Add and commit every row from `rows`, awaiting {@link WorkbookWriter.flush} every `flushEvery`
@@ -203,7 +270,9 @@ export class WorksheetWriter {
     rows: Iterable<RowValues> | AsyncIterable<RowValues>,
     opts?: { flushEvery?: number },
   ): Promise<void> {
-    const flushEvery = Math.max(1, opts?.flushEvery ?? 10_000);
+    const flushEvery = opts?.flushEvery ?? 10_000;
+    if (!Number.isSafeInteger(flushEvery) || flushEvery < 1)
+      throw new RangeError("flushEvery must be a positive integer");
     let n = 0;
     for await (const data of rows) {
       this.addRow(data).commit();
@@ -214,20 +283,18 @@ export class WorksheetWriter {
   /** Emit the sheet prologue and open its zip entry, exactly once. */
   private ensureStarted(): void {
     if (this.started) return;
-    this.started = true;
     this.workbook.beginSheet(this);
     this.workbook.startSheetEntry(`xl/worksheets/${this.rel.fileName}`);
+    this.started = true;
 
     const w = new XmlWriter();
     w.open("worksheet", { xmlns: NS.spreadsheetml, "xmlns:r": NS.relationships });
     // `<dimension>` is intentionally omitted (it must precede the views, but the sheet's extent is not
     // known until the last row — the reader recomputes it). Panes + gridlines come from the config.
     const props = this.sheet.properties;
+    renderSheetProperties(w, props);
     renderSheetViews(w, this.sheet.views, props.showGridLines);
-    w.leaf("sheetFormatPr", {
-      defaultRowHeight: props.defaultRowHeight ?? 15,
-      defaultColWidth: props.defaultColWidth,
-    });
+    renderSheetFormatPr(w, props);
     // CT_Worksheet order: `<cols>` sits after `<sheetFormatPr>`, before `<sheetData>`.
     renderCols(w, this.sheet.model.columns, this.workbook.context);
     w.open("sheetData");
@@ -238,6 +305,9 @@ export class WorksheetWriter {
    *  flush the sheet `.rels` + child parts (comments/VML, drawing/media), close the part. */
   commit(): void {
     if (this.committed) return;
+    this.workbook.assertWritable();
+    if (this.lastCommittedRow !== this.rowCount)
+      throw new Error("commit all rows before committing the worksheet");
     this.ensureStarted();
 
     // Mirror renderWorksheet's epilogue on the F0 seam: one per-sheet rId allocator backs the
@@ -275,6 +345,7 @@ export class WorksheetWriter {
     for (const part of extraParts) this.workbook.addExtraPart(part);
 
     this.committed = true;
+    this.sharedMasters.clear();
     this.workbook.endSheet(this);
   }
 }
@@ -314,6 +385,8 @@ export class WorkbookWriter implements AsyncIterable<Uint8Array> {
   private readonly drain?: Promise<void>;
 
   constructor(options?: WorkbookWriterOptions) {
+    if (options?.filename !== undefined && options.stream !== undefined)
+      throw new Error("filename and stream are mutually exclusive");
     this.useSharedStrings = options?.useSharedStrings === true;
     this.useStyles = options?.useStyles !== false;
     // When styles are disabled, cells intern nothing (always `s=0`); styles.xml still ships its baseline.
@@ -339,6 +412,7 @@ export class WorkbookWriter implements AsyncIterable<Uint8Array> {
     if (this.committed) throw new Error("workbook is already committed");
     const index = this.rels.length;
     const resolvedName = name ?? `Sheet${index + 1}`;
+    validateWorksheetNameFormat(resolvedName);
     const lower = resolvedName.toLowerCase();
     for (const r of this.rels) {
       if (r.name.toLowerCase() === lower) throw new DuplicateWorksheetNameError(resolvedName);
@@ -373,6 +447,7 @@ export class WorkbookWriter implements AsyncIterable<Uint8Array> {
   async commit(): Promise<void> {
     this.sink.throwIfFailed();
     if (this.committed) throw new Error("workbook is already committed");
+    if (this.active) this.active.commit();
     // Be forgiving if a caller forgot to commit a sheet (ExcelJS requires it explicitly).
     for (const ws of this.writers) {
       if (!ws.isCommitted) ws.commit();
