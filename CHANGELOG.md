@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.14.0
+
+### Minor Changes
+
+- 3daa3c8: Protect address caches and improve OOXML namespace interoperability.
+
+  - Return frozen cached address results with readonly coordinate fields; preserve cached object identity and bounded eviction.
+  - Decode doubled apostrophes in quoted sheet references, including ranges and absolute addresses.
+  - Resolve namespaces by scoped URI bindings across package wiring, worksheets, styles, shared strings, comments, metadata, and drawings. Normalize relationship attributes and skip foreign namespace subtrees.
+  - Retain the namespace-free fragment behavior of the low-level part-reader helpers.
+  - Add deterministic address property tests, an independently handwritten package, and an ExcelJS-produced workbook with systematically renamed namespace prefixes, including styles, links, notes, and an image.
+
+  Use a spread copy of decodeAddress() results if mutable coordinates are needed.
+
+- d4422a4: Bound imported worksheet-model expansion and validate grid coordinates and numeric cell values consistently.
+
+  - Add workbook-wide read budgets for cells (1,000,000), allocated rows (1,048,576), merged-range areas (100,000 cells), and expanded column definitions (100,000). Overrides and Infinity are supported. Merge and column-range work is checked before expansion; cells created by comments and hyperlinks also count.
+  - Keep row numbering intact after a streamed addRow() rejects an invalid payload.
+  - Enforce Excel's row and column limits across numeric/string coordinates, ranges, constructors, imported references, and row/column edits. Preflight edit bounds and numeric inserts before moving existing data.
+  - Reject NaN, infinities, invalid Dates, and invalid cached formula results with InvalidCellValueError. Revalidate mutable values at serialization time and reject invalid date conversions.
+  - Preserve the workbook.xlsx type in packed declarations so downstream ESM/CommonJS consumers can use the documented accessor and new read options.
+
+  Import budgets reset for each read and are removed before returning the workbook, so later user edits are unaffected. These limits count model objects and expansion work, not exact heap bytes.
+
+- 372fe94: Harden exports and imports and provide conditional browser builds.
+
+  - Reject destination errors and premature closes without hanging flushes or background rejections.
+  - Ship browser builds without filesystem imports; verify packed ESM, CommonJS, downstream types, and browser consumers in CI.
+  - Preserve inline rich text, literal ST_Xstring escape tokens, worksheet defaults, outline levels, tab colors, and custom descenders.
+  - Support explicitly declared shared/array formula groups in streamed workbooks; reject ambiguous shared references.
+  - Validate streaming worksheet names, row order, duplicate commits, output options, and flush intervals.
+  - Track the highest buffered row incrementally so appending rows no longer scans every existing row.
+  - Add configurable ZIP allocation limits and typed ReadLimitError failures. Reads default to 128 MiB of input, 10,000 entries, 256 MiB per entry, and 1 GiB total; overrides and Infinity are available for trusted large inputs.
+
+  Streaming rows must be committed once, in creation order, before committing the worksheet.
+  Update the streaming examples to yield to their destination through writeRows() or periodic flush().
+
+- c6d8ab4: Add opt-in structured import warnings and strict known-loss checks. Add streaming export cancellation, awaitable row production, and byte-based backpressure with a default 16 MiB hard output queue ceiling. Synchronous producers exceeding the ceiling now fail explicitly; use writeRows, addRowAsync, or commitAsync for large exports.
+
 ## 0.13.0
 
 ### Minor Changes
