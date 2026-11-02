@@ -12,6 +12,8 @@
 // has already been handed to the sink; a `filename`/`stream` destination is drained asynchronously by a
 // background pump the writer awaits in `commit()`.
 
+import { openFileStream } from "../../platform/io.js";
+
 /** Terminal destination for the streaming zip's byte chunks. Written to synchronously from the zip's
  *  `ondata` callback; `close`/`abort` fire exactly once at the end of the archive. */
 export interface ByteSink {
@@ -141,16 +143,34 @@ export async function drainToWritable(
   source: AsyncIterable<Uint8Array>,
   writable: NodeWritableLike,
 ): Promise<void> {
-  let rejectFailure!: (error: unknown) => void;
+  let rejectPending: ((error: unknown) => void) | undefined;
+  let failed = false;
+  let failure: unknown;
   let finished = false;
-  const failure = new Promise<never>((_resolve, reject) => {
-    rejectFailure = reject;
-  });
+  const fail = (error: unknown): void => {
+    if (failed) return;
+    failed = true;
+    failure = error;
+    if (source instanceof QueueSink) source.abort(error);
+    rejectPending?.(error);
+  };
+  // Subscribe only the current operation. Racing every chunk against one never-settled promise
+  // would accumulate a promise reaction per chunk for the entire lifetime of a large export.
+  const waitFor = <T>(operation: Promise<T>): Promise<T> =>
+    new Promise<T>((resolve, reject) => {
+      rejectPending = reject;
+      operation.then((value) => {
+        rejectPending = undefined;
+        if (failed) reject(failure);
+        else resolve(value);
+      }, reject);
+      if (failed) reject(failure);
+    });
   const onError = (error?: unknown): void => {
-    rejectFailure(error);
+    fail(error);
   };
   const onClose = (): void => {
-    if (!finished) rejectFailure(new Error("export destination closed before completion"));
+    if (!finished) fail(new Error("export destination closed before completion"));
   };
   // Watch the whole lifecycle, including periods when the producer has supplied no bytes yet.
   writable.once("error", onError);
@@ -158,37 +178,35 @@ export async function drainToWritable(
   const iterator = source[Symbol.asyncIterator]();
   try {
     for (;;) {
-      const item = await Promise.race([iterator.next(), failure]);
+      const item = await waitFor(iterator.next());
       if (item.done) break;
       if (!writable.write(item.value)) {
         let onDrain!: () => void;
         try {
-          await Promise.race([
+          await waitFor(
             new Promise<void>((resolve) => {
               onDrain = resolve;
               writable.once("drain", onDrain);
             }),
-            failure,
-          ]);
+          );
         } finally {
           writable.removeListener("drain", onDrain);
         }
       }
       if (source instanceof QueueSink) source.acknowledge();
     }
-    await Promise.race([
+    await waitFor(
       new Promise<void>((resolve) => {
         writable.end((error) => {
           if (error) {
-            rejectFailure(error);
+            fail(error);
             return;
           }
           finished = true;
           resolve();
         });
       }),
-      failure,
-    ]);
+    );
   } catch (error) {
     if (source instanceof QueueSink) source.abort(error);
     writable.destroy();
@@ -202,7 +220,6 @@ export async function drainToWritable(
 /** Pump an async byte stream to a file. The sole `node:fs` touch in the streaming writer — imported
  *  lazily so browser bundles that only use the async-iterable or `Writable` sinks never pull it in. */
 export async function drainToFile(source: AsyncIterable<Uint8Array>, path: string): Promise<void> {
-  const { createWriteStream } = await import("node:fs");
-  const writable = createWriteStream(path) as unknown as NodeWritableLike;
+  const writable = await openFileStream(path);
   await drainToWritable(source, writable);
 }

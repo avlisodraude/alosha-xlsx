@@ -5,6 +5,8 @@
 
 import type { ImageExtension, Worksheet } from "../model/index.js";
 import { Workbook } from "../model/index.js";
+import { readFileBytes } from "../platform/io.js";
+import { type ReadLimits, resolveReadLimits } from "../read-limits.js";
 import { IMAGE_CONTENT_TYPE, PART_PATH, REL_TYPE } from "./parts/constants.js";
 import { parseDrawing } from "./read/drawing.js";
 import { openPackage, type PackageParts, type ResolvedRel } from "./read/package.js";
@@ -14,13 +16,12 @@ import { parseStyles } from "./read/styles.js";
 import { parseWorkbook } from "./read/workbook.js";
 import { parseWorksheet } from "./read/worksheet.js";
 
-/** Reserved for future read options (e.g. `ignoreStyles`). None are required for v1. */
-// biome-ignore lint/suspicious/noEmptyInterface: intentionally empty; a stable extension point.
-export interface ReadOptions {}
+/** Input/archive allocation limits; omitted limits use DEFAULT_READ_LIMITS. */
+export type ReadOptions = ReadLimits;
 
 /** Parse a buffered `.xlsx` into a `Workbook`. Environment-agnostic (no `fs`); see `readWorkbookFile`. */
-export function readWorkbookBuffer(bytes: Uint8Array, _options?: ReadOptions): Workbook {
-  const pkg = openPackage(bytes);
+export function readWorkbookBuffer(bytes: Uint8Array, options?: ReadOptions): Workbook {
+  const pkg = openPackage(bytes, options);
   const rels = pkg.workbookRels();
 
   // The pooled parts, located by relationship type so a foreign producer's file names still resolve.
@@ -71,8 +72,8 @@ export function readWorkbookBuffer(bytes: Uint8Array, _options?: ReadOptions): W
 /** Node-only convenience: read and parse a `.xlsx` from disk. Isolated here so browser bundles that
  *  only use {@link readWorkbookBuffer} never pull in `node:fs`. */
 export async function readWorkbookFile(path: string, options?: ReadOptions): Promise<Workbook> {
-  const { readFile } = await import("node:fs/promises");
-  const bytes = await readFile(path);
+  const limits = resolveReadLimits(options);
+  const bytes = await readFileBytes(path, limits.maxInputBytes);
   return readWorkbookBuffer(bytes, options);
 }
 

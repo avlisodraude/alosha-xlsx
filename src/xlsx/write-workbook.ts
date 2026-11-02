@@ -7,6 +7,7 @@
 // an id (and a part) when the pool is non-empty.
 
 import type { Workbook } from "../model/index.js";
+import { writeFileBytes } from "../platform/io.js";
 import { writeZipArchive, type ZipEntries } from "../zip-layer.js";
 import { renderAppProps } from "./parts/app-props.js";
 import type { SheetRel, WorkbookRel } from "./parts/constants.js";
@@ -187,6 +188,5 @@ export async function writeWorkbookFile(
   options?: WriteOptions,
 ): Promise<void> {
   const bytes = writeWorkbookBuffer(wb, options);
-  const { writeFile } = await import("node:fs/promises");
-  await writeFile(path, bytes);
+  await writeFileBytes(path, bytes);
 }

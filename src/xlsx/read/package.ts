@@ -2,7 +2,8 @@
 // `parts/root-rels.ts`/`parts/workbook-rels.ts` in reverse: everything is resolved through the OPC
 // relationships rather than fixed paths, so a foreign producer using different part names still works.
 
-import { InvalidPackageError, UnsupportedFeatureError } from "../../errors.js";
+import { InvalidPackageError, ReadLimitError, UnsupportedFeatureError } from "../../errors.js";
+import { type ReadLimits, resolveReadLimits } from "../../read-limits.js";
 import { cursor } from "../../xml/index.js";
 import { readZipArchive, type ZipEntries } from "../../zip-layer.js";
 import { CONTENT_TYPE, PART_PATH, REL_TYPE } from "../parts/constants.js";
@@ -41,8 +42,8 @@ interface RelEntry {
 const decoder = new TextDecoder();
 
 /** Unzips `.xlsx` bytes and resolves the workbook part + its relationships. */
-export function openPackage(bytes: Uint8Array): PackageParts {
-  const zip = readZip(bytes);
+export function openPackage(bytes: Uint8Array, options?: ReadLimits): PackageParts {
+  const zip = readZip(bytes, options);
 
   const entry = (path: string): Uint8Array | undefined => zip.get(path);
   const text = (path: string): string | undefined => {
@@ -104,10 +105,12 @@ export function openPackage(bytes: Uint8Array): PackageParts {
   };
 }
 
-function readZip(bytes: Uint8Array): ZipEntries {
+function readZip(bytes: Uint8Array, options?: ReadLimits): ZipEntries {
+  const limits = resolveReadLimits(options);
   try {
-    return readZipArchive(bytes);
+    return readZipArchive(bytes, limits);
   } catch (e) {
+    if (e instanceof ReadLimitError) throw e;
     throw new InvalidPackageError(`could not read zip archive: ${(e as Error).message}`);
   }
 }

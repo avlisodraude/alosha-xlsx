@@ -25,6 +25,7 @@ export type AloshaXlsxErrorCode =
   | "INVALID_CELL_VALUE"
   | "UNSUPPORTED_FEATURE"
   | "INVALID_PACKAGE"
+  | "READ_LIMIT_EXCEEDED"
   | "INVALID_PANE"
   | "INVALID_CONDITIONAL_FORMATTING"
   | "INVALID_IMAGE_ANCHOR"
@@ -207,6 +208,18 @@ export class InvalidPackageError extends AloshaXlsxError {
   readonly code = "INVALID_PACKAGE" as const;
   constructor(public readonly reason: string) {
     super(`Invalid .xlsx package: ${reason}`);
+  }
+}
+
+/** A configured input/archive budget was exceeded before the corresponding allocation. */
+export class ReadLimitError extends AloshaXlsxError {
+  readonly code = "READ_LIMIT_EXCEEDED" as const;
+  constructor(
+    public readonly limit: string,
+    public readonly maximum: number,
+    public readonly actual: number,
+  ) {
+    super(`Read limit ${limit} exceeded: ${actual} > ${maximum}`);
   }
 }
 

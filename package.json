@@ -22,18 +22,50 @@
   "type": "module",
   "sideEffects": [
     "./dist/*.js",
-    "./dist/*.cjs"
+    "./dist/*.cjs",
+    "./dist-browser/*.js",
+    "./dist-browser/*.cjs"
   ],
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "browser": {
+        "import": {
+          "types": "./dist-browser/index.d.ts",
+          "default": "./dist-browser/index.js"
+        },
+        "require": {
+          "types": "./dist-browser/index.d.cts",
+          "default": "./dist-browser/index.cjs"
+        }
+      },
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./compat": {
-      "types": "./dist/compat.d.ts",
-      "import": "./dist/compat.js",
-      "require": "./dist/compat.cjs"
+      "browser": {
+        "import": {
+          "types": "./dist-browser/compat.d.ts",
+          "default": "./dist-browser/compat.js"
+        },
+        "require": {
+          "types": "./dist-browser/compat.d.cts",
+          "default": "./dist-browser/compat.cjs"
+        }
+      },
+      "import": {
+        "types": "./dist/compat.d.ts",
+        "default": "./dist/compat.js"
+      },
+      "require": {
+        "types": "./dist/compat.d.cts",
+        "default": "./dist/compat.cjs"
+      }
     },
     "./package.json": "./package.json"
   },
@@ -42,6 +74,7 @@
   "types": "./dist/index.d.ts",
   "files": [
     "dist",
+    "dist-browser",
     "README.md",
     "LICENSE"
   ],
@@ -57,6 +90,7 @@
     "dev": "tsup --watch",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:package": "node --import tsx tests/package-smoke.ts",
     "lint": "biome check .",
     "format": "biome format --write .",
     "typecheck": "tsc --noEmit",
@@ -71,6 +105,7 @@
     "@changesets/cli": "^2.31.0",
     "@types/node": "^22.10.0",
     "exceljs": "^4.4.0",
+    "esbuild": "0.27.7",
     "tsup": "^8.5.0",
     "tsx": "^4.19.2",
     "typescript": "^5.9.3",
