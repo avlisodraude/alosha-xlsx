@@ -55,13 +55,19 @@ assert.equal(new ExcelJS.Workbook().addWorksheet("C").name, "C");
   );
   execFileSync(process.execPath, [join(temp, "consumer.cjs")], { stdio: "pipe" });
 
-  const typed = `import { Workbook, type ReadOptions } from "@alosha/xlsx";
+  const typed = `import { Workbook, WorkbookWriter, type ReadOptions, type WorkbookWriterOptions } from "@alosha/xlsx";
 import ExcelJS from "@alosha/xlsx/compat";
 const wb: Workbook = new Workbook();
-const limits: ReadOptions = { maxCells: 100, maxRows: 100, maxMergeCells: 100, maxColumnDefinitions: 100 };
+const limits: ReadOptions = { strict: true, onWarning: warning => { const part: string = warning.part; void part; }, maxCells: 100, maxRows: 100, maxMergeCells: 100, maxColumnDefinitions: 100 };
 void wb.xlsx.load(new Uint8Array(), limits).catch(() => undefined);
 wb.addWorksheet("S").getCell("A1").value = "typed";
 new ExcelJS.Workbook().addWorksheet("C");
+const options: WorkbookWriterOptions = { signal: new AbortController().signal, highWaterMarkBytes: 1024, maxBufferedBytes: 65536 };
+const writer = new WorkbookWriter(options);
+const sheet = writer.addWorksheet("Stream");
+const pending: Promise<void> = sheet.addRow([1]).commitAsync();
+void pending; void sheet.addRowAsync([2]); writer.abort();
+
 `;
   await writeFile(join(temp, "consumer.mts"), typed);
   await writeFile(join(temp, "consumer.cts"), typed);
@@ -104,7 +110,7 @@ import { Workbook, WorkbookWriter } from "@alosha/xlsx";
 import ExcelJS from "@alosha/xlsx/compat";
 globalThis.smoke = async () => {
   const wb = new Workbook(); wb.addWorksheet("S").getCell("A1").value = "browser";
-  const loaded = new Workbook(); await loaded.xlsx.load(await wb.xlsx.writeBuffer(), { maxCells: 1, maxRows: 1 });
+  const loaded = new Workbook(); await loaded.xlsx.load(await wb.xlsx.writeBuffer(), { maxCells: 1, maxRows: 1, strict: true });
   if (loaded.getWorksheet("S").getCell("A1").value !== "browser") throw Error("buffer roundtrip");
   if (new ExcelJS.Workbook().addWorksheet("C").name !== "C") throw Error("compat export");
   const writer = new WorkbookWriter(); writer.addWorksheet("Stream").addRow([7]).commit();
@@ -113,6 +119,10 @@ globalThis.smoke = async () => {
   let offset = 0; for (const c of chunks) { bytes.set(c,offset); offset += c.length; }
   const parsed = new Workbook(); await parsed.xlsx.load(bytes);
   if (parsed.getWorksheet("Stream").getCell("A1").value !== 7) throw Error("stream roundtrip");
+  const controller = new AbortController(); controller.abort("cancelled");
+  const cancelled = new WorkbookWriter({ signal: controller.signal });
+  try { await cancelled.commit(); throw Error("expected abort"); }
+  catch(e) { if (e.code !== "EXPORT_ABORTED") throw e; }
   try { await wb.xlsx.readFile("unavailable.xlsx"); } catch(e) {
     if (e.code === "UNSUPPORTED_FEATURE") return;
     throw e;
@@ -128,7 +138,7 @@ globalThis.smoke = async () => {
   });
   assert(Object.keys(browser.metafile.inputs).some((path) => path.includes("dist-browser")));
   const context: { smoke?: () => Promise<void> } = {};
-  Object.assign(context, { TextEncoder, TextDecoder, Uint8Array });
+  Object.assign(context, { TextEncoder, TextDecoder, Uint8Array, AbortController });
   runInNewContext(browser.outputFiles[0]?.text ?? "", context);
   assert(context.smoke);
   await context.smoke();

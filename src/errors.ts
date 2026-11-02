@@ -13,6 +13,8 @@
  * replace ExcelJS's `console.warn`/`console.trace` side effects with thrown, inspectable errors.
  */
 
+import type { ImportWarning } from "./read-options.js";
+
 export type AloshaXlsxErrorCode =
   | "INVALID_ADDRESS"
   | "INVALID_RANGE"
@@ -26,6 +28,9 @@ export type AloshaXlsxErrorCode =
   | "UNSUPPORTED_FEATURE"
   | "INVALID_PACKAGE"
   | "READ_LIMIT_EXCEEDED"
+  | "IMPORT_WARNING"
+  | "EXPORT_ABORTED"
+  | "STREAM_BUFFER_LIMIT"
   | "INVALID_PANE"
   | "INVALID_CONDITIONAL_FORMATTING"
   | "INVALID_IMAGE_ANCHOR"
@@ -220,6 +225,32 @@ export class ReadLimitError extends AloshaXlsxError {
     public readonly actual: number,
   ) {
     super(`Read limit ${limit} exceeded: ${actual} > ${maximum}`);
+  }
+}
+
+export class ImportWarningError extends AloshaXlsxError {
+  readonly code = "IMPORT_WARNING" as const;
+  constructor(public readonly warning: ImportWarning) {
+    super(`Import would discard content in ${warning.part}: ${warning.message}`);
+  }
+}
+
+export class ExportAbortedError extends AloshaXlsxError {
+  readonly code = "EXPORT_ABORTED" as const;
+  constructor(public readonly reason?: unknown) {
+    super("Workbook export aborted");
+  }
+}
+
+export class StreamBufferLimitError extends AloshaXlsxError {
+  readonly code = "STREAM_BUFFER_LIMIT" as const;
+  constructor(
+    public readonly maximum: number,
+    public readonly actual: number,
+  ) {
+    super(
+      `Stream output buffer limit exceeded: ${actual} > ${maximum}; await row.commitAsync(), worksheet.addRowAsync(), or writeRows()`,
+    );
   }
 }
 

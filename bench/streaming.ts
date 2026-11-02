@@ -45,7 +45,10 @@ function peakRssBytes(): number {
 async function runStreaming(path: string): Promise<number> {
   const wb = new WorkbookWriter({ filename: path, useSharedStrings: false });
   const ws = wb.addWorksheet("Bench");
-  for (let r = 1; r <= ROWS; r++) ws.addRow(streamRowValues(r, COLS)).commit();
+  function* rows() {
+    for (let r = 1; r <= ROWS; r++) yield streamRowValues(r, COLS);
+  }
+  await ws.writeRows(rows());
   ws.commit();
   await wb.commit();
   return existsSync(path) ? readFileSync(path).byteLength : 0;

@@ -24,6 +24,7 @@ export * from "./address/index.js";
 export * from "./errors.js";
 export * from "./model/index.js";
 export { DEFAULT_READ_LIMITS, type ReadLimits } from "./read-limits.js";
+export type { ImportWarning } from "./read-options.js";
 export * from "./xlsx/index.js";
 export type { XlsxAccessor } from "./xlsx-accessor.js";
 

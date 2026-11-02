@@ -12,6 +12,7 @@
 // has already been handed to the sink; a `filename`/`stream` destination is drained asynchronously by a
 // background pump the writer awaits in `commit()`.
 
+import { ExportAbortedError, StreamBufferLimitError } from "../../errors.js";
 import { openFileStream } from "../../platform/io.js";
 
 /** Terminal destination for the streaming zip's byte chunks. Written to synchronously from the zip's
@@ -38,7 +39,8 @@ export interface NodeWritableLike {
  *  consumer asks are buffered; a pending `next()` is resolved as soon as a chunk arrives. Single
  *  consumer (one iterator) — matching how the writer is drained. */
 export class QueueSink implements ByteSink, AsyncIterable<Uint8Array> {
-  private readonly queue: Uint8Array[] = [];
+  private queue: Array<Uint8Array | undefined> = [];
+  private head = 0;
   private pending?: {
     resolve: (r: IteratorResult<Uint8Array>) => void;
     reject: (e: unknown) => void;
@@ -46,94 +48,197 @@ export class QueueSink implements ByteSink, AsyncIterable<Uint8Array> {
   private done = false;
   private failed = false;
   private failure?: unknown;
-  private outstanding = 0;
-  /** Resolvers waiting on {@link whenDrained}; settled once the buffer empties (or the stream ends). */
-  private drainWaiters: Array<{ resolve: () => void; reject: (error: unknown) => void }> = [];
+  private bytes = 0;
+  private claimed = false;
+  private waiters: Array<{
+    capacity: boolean;
+    resolve: () => void;
+    reject: (error: unknown) => void;
+  }> = [];
+  private readonly failures = new Set<(error: unknown) => void>();
+  private completion?: () => void;
 
+  constructor(
+    readonly highWaterMarkBytes = 1024 * 1024,
+    readonly maxBufferedBytes = 16 * 1024 * 1024,
+  ) {
+    for (const value of [highWaterMarkBytes, maxBufferedBytes]) {
+      if (!Number.isSafeInteger(value) || value < 1)
+        throw new RangeError("stream byte limits must be positive safe integers");
+    }
+    if (highWaterMarkBytes > maxBufferedBytes)
+      throw new RangeError("highWaterMarkBytes must not exceed maxBufferedBytes");
+  }
+
+  get bufferedBytes(): number {
+    return this.bytes;
+  }
   throwIfFailed(): void {
     if (this.failed) throw this.failure;
+  }
+  onFailure(listener: (error: unknown) => void): () => void {
+    if (this.failed) listener(this.failure);
+    else this.failures.add(listener);
+    return () => {
+      this.failures.delete(listener);
+    };
+  }
+  onComplete(listener: () => void): void {
+    this.completion = listener;
+    this.settle();
   }
 
   write(chunk: Uint8Array): void {
     this.throwIfFailed();
-    this.outstanding++;
-    if (this.pending) {
-      // Handed straight to a waiting consumer — never enters the queue, so the buffer stays empty.
-      const p = this.pending;
-      this.pending = undefined;
-      p.resolve({ value: chunk, done: false });
-    } else {
-      this.queue.push(chunk);
+    if (this.done) throw new Error("stream output is already closed");
+    const size = this.bytes + chunk.byteLength;
+    if (size > this.maxBufferedBytes) {
+      const error = new StreamBufferLimitError(this.maxBufferedBytes, size);
+      this.abort(error);
+      throw error;
     }
+    this.bytes = size;
+    if (this.pending) {
+      const pending = this.pending;
+      this.pending = undefined;
+      pending.resolve({ value: chunk, done: false });
+    } else this.queue.push(chunk);
   }
 
   close(): void {
     this.done = true;
-    this.settleDrainWaiters();
     if (this.pending) {
-      const p = this.pending;
+      const pending = this.pending;
       this.pending = undefined;
-      p.resolve({ value: undefined, done: true });
+      pending.resolve({ value: undefined, done: true });
     }
+    this.settle();
   }
 
   abort(error: unknown): void {
     if (this.failed) return;
     this.failed = true;
     this.failure = error;
-    this.queue.length = 0;
-    this.settleDrainWaiters();
+    this.queue = [];
+    this.head = 0;
+    this.bytes = 0;
     if (this.pending) {
-      const p = this.pending;
+      const pending = this.pending;
       this.pending = undefined;
-      p.reject(error);
+      pending.reject(error);
+    }
+    this.settle();
+    for (const listener of this.failures) listener(error);
+    this.failures.clear();
+    this.completion = undefined;
+  }
+
+  acknowledge(size: number): void {
+    if (!this.failed) this.bytes -= size;
+    this.settle();
+  }
+  whenDrained(): Promise<void> {
+    return this.wait(false);
+  }
+  whenReady(): Promise<void> {
+    return this.wait(true);
+  }
+  private wait(capacity: boolean): Promise<void> {
+    if (this.failed) return Promise.reject(this.failure);
+    if (capacity ? this.bytes < this.highWaterMarkBytes : this.bytes === 0)
+      return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      this.waiters.push({ capacity, resolve, reject });
+    });
+  }
+  private settle(): void {
+    const remaining: typeof this.waiters = [];
+    for (const waiter of this.waiters) {
+      if (this.failed) waiter.reject(this.failure);
+      else if (waiter.capacity ? this.bytes < this.highWaterMarkBytes : this.bytes === 0)
+        waiter.resolve();
+      else remaining.push(waiter);
+    }
+    this.waiters = remaining;
+    if (!this.failed && this.done && this.bytes === 0 && this.completion) {
+      const complete = this.completion;
+      this.completion = undefined;
+      complete();
     }
   }
 
-  /** Resolve once the buffered queue has drained to the consumer (or the stream has ended/failed).
-   *  The writer's `flush()` awaits this so a caller can yield the event loop mid-write and let a
-   *  background pump empty the queue, keeping peak memory flat instead of buffering the whole archive. */
-  whenDrained(): Promise<void> {
-    if (this.failed) return Promise.reject(this.failure);
-    if (this.outstanding === 0) {
-      return Promise.resolve();
-    }
-    return new Promise<void>((resolve, reject) => {
-      this.drainWaiters.push({ resolve, reject });
+  /** Await a single operation while observing cancellation, without retaining one promise reaction
+   * per chunk on a long-lived rejection promise. */
+  withCancellation<T>(operation: Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const unsubscribe = this.onFailure(reject);
+      operation.then(
+        (value) => {
+          unsubscribe();
+          if (this.failed) reject(this.failure);
+          else resolve(value);
+        },
+        (error: unknown) => {
+          unsubscribe();
+          reject(error);
+        },
+      );
     });
   }
 
-  /** Called by the destination pump after a chunk has been accepted, including backpressure. */
-  acknowledge(): void {
-    this.outstanding--;
-    if (this.outstanding === 0) this.settleDrainWaiters();
-  }
-
-  private settleDrainWaiters(): void {
-    if (!this.failed && this.outstanding !== 0) return;
-    if (this.drainWaiters.length === 0) return;
-    const waiters = this.drainWaiters;
-    this.drainWaiters = [];
-    for (const waiter of waiters) {
-      if (this.failed) waiter.reject(this.failure);
-      else waiter.resolve();
-    }
-  }
-
-  [Symbol.asyncIterator](): AsyncIterator<Uint8Array> {
+  iterator(manualAcknowledgement = false): AsyncIterator<Uint8Array> {
+    if (this.claimed) throw new Error("stream output supports one consumer");
+    this.claimed = true;
+    let delivered = 0;
+    let reading = false;
+    let finished = false;
     return {
-      next: (): Promise<IteratorResult<Uint8Array>> => {
-        if (this.failed) return Promise.reject(this.failure);
-        if (this.queue.length > 0) {
-          const chunk = this.queue.shift() as Uint8Array;
-          return Promise.resolve({ value: chunk, done: false });
+      next: async () => {
+        if (reading) throw new Error("concurrent stream next() calls are unsupported");
+        if (finished) return { value: undefined, done: true };
+        this.throwIfFailed();
+        if (!manualAcknowledgement && delivered) {
+          this.acknowledge(delivered);
+          delivered = 0;
         }
-        if (this.done) return Promise.resolve({ value: undefined, done: true });
-        return new Promise((resolve, reject) => {
-          this.pending = { resolve, reject };
-        });
+        reading = true;
+        try {
+          let result: IteratorResult<Uint8Array>;
+          if (this.head < this.queue.length) {
+            const value = this.queue[this.head] as Uint8Array;
+            this.queue[this.head++] = undefined;
+            if (this.head === this.queue.length) {
+              this.queue = [];
+              this.head = 0;
+            }
+            result = { value, done: false };
+          } else if (this.done) result = { value: undefined, done: true };
+          else
+            result = await new Promise<IteratorResult<Uint8Array>>((resolve, reject) => {
+              this.pending = { resolve, reject };
+            });
+          if (result.done) finished = true;
+          else delivered = result.value.byteLength;
+          return result;
+        } finally {
+          reading = false;
+        }
+      },
+      return: async () => {
+        if (!finished)
+          this.abort(new ExportAbortedError("output consumer stopped before completion"));
+        finished = true;
+        return { value: undefined, done: true };
+      },
+      throw: async (error) => {
+        this.abort(error);
+        finished = true;
+        throw error;
       },
     };
+  }
+  [Symbol.asyncIterator](): AsyncIterator<Uint8Array> {
+    return this.iterator();
   }
 }
 
@@ -175,7 +280,9 @@ export async function drainToWritable(
   // Watch the whole lifecycle, including periods when the producer has supplied no bytes yet.
   writable.once("error", onError);
   writable.once("close", onClose);
-  const iterator = source[Symbol.asyncIterator]();
+  const iterator =
+    source instanceof QueueSink ? source.iterator(true) : source[Symbol.asyncIterator]();
+  const unsubscribe = source instanceof QueueSink ? source.onFailure(fail) : undefined;
   try {
     for (;;) {
       const item = await waitFor(iterator.next());
@@ -193,7 +300,7 @@ export async function drainToWritable(
           writable.removeListener("drain", onDrain);
         }
       }
-      if (source instanceof QueueSink) source.acknowledge();
+      if (source instanceof QueueSink) source.acknowledge(item.value.byteLength);
     }
     await waitFor(
       new Promise<void>((resolve) => {
@@ -214,6 +321,7 @@ export async function drainToWritable(
   } finally {
     writable.removeListener("error", onError);
     writable.removeListener("close", onClose);
+    unsubscribe?.();
   }
 }
 

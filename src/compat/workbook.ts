@@ -436,8 +436,18 @@ class CompatWorksheetWriter {
 
   /** The returned row is a real model `Row` (plus `commit()`); `wrap` proxies it exactly like the
    *  buffered facade's rows (ExcelJS `cell.type` numbers, whole-object style setters, `cell.note`). */
-  addRow(data: RowValues): Row & { commit(): void } {
-    return wrap(this.#raw.addRow(data)) as Row & { commit(): void };
+  addRow(data: RowValues): Row & { commit(): void; commitAsync(): Promise<void> } {
+    return wrap(this.#raw.addRow(data)) as Row & { commit(): void; commitAsync(): Promise<void> };
+  }
+
+  async addRowAsync(data: RowValues): Promise<void> {
+    await this.#raw.addRowAsync(data);
+  }
+  async writeRows(
+    rows: Iterable<RowValues> | AsyncIterable<RowValues>,
+    options?: { flushEvery?: number },
+  ): Promise<void> {
+    await this.#raw.writeRows(rows, options);
   }
 
   commit(): void {
@@ -447,6 +457,19 @@ class CompatWorksheetWriter {
 
 class CompatWorkbookWriter implements AsyncIterable<Uint8Array> {
   #raw: CoreStreamWorkbookWriter;
+
+  get bufferedBytes(): number {
+    return this.#raw.bufferedBytes;
+  }
+  abort(reason?: unknown): void {
+    this.#raw.abort(reason);
+  }
+  async flush(): Promise<void> {
+    await this.#raw.flush();
+  }
+  async ready(): Promise<void> {
+    await this.#raw.ready();
+  }
 
   constructor(options?: unknown) {
     const opts = (options ?? {}) as Record<string, unknown>;
@@ -463,6 +486,9 @@ class CompatWorkbookWriter implements AsyncIterable<Uint8Array> {
       stream: opts.stream as NodeWritableLike | undefined,
       useSharedStrings: opts.useSharedStrings as boolean | undefined,
       useStyles: opts.useStyles as boolean | undefined,
+      signal: opts.signal as AbortSignal | undefined,
+      highWaterMarkBytes: opts.highWaterMarkBytes as number | undefined,
+      maxBufferedBytes: opts.maxBufferedBytes as number | undefined,
     });
     if (opts.creator !== undefined) this.#raw.creator = opts.creator as string;
     if (opts.lastModifiedBy !== undefined) this.#raw.lastModifiedBy = opts.lastModifiedBy as string;

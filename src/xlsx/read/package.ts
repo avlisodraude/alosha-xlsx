@@ -18,6 +18,7 @@ export interface ResolvedRel {
 
 /** Resolved OOXML package parts, discovered via the OPC relationships. */
 export interface PackageParts {
+  paths(): IterableIterator<string>;
   /** Raw bytes of a part, or `undefined` if the archive has no such entry. */
   entry(path: string): Uint8Array | undefined;
   /** UTF-8 decoded text of a part, or `undefined` if the archive has no such entry. */
@@ -97,6 +98,7 @@ export function openPackage(bytes: Uint8Array, options?: ReadLimits): PackagePar
   };
 
   return {
+    paths: () => zip.keys(),
     entry,
     text,
     workbookRels: () => relsMap,

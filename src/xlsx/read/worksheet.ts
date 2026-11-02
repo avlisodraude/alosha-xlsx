@@ -49,6 +49,7 @@ import {
   type WorksheetView,
 } from "../../model/index.js";
 import { modelReadBudget } from "../../model/read-budget.js";
+import type { ImportWarning } from "../../read-options.js";
 import { cursor, localName, type XmlCursor, type XmlEvent } from "../../xml/index.js";
 import { serialToDate } from "../date.js";
 import { NS, REL_TYPE } from "../parts/constants.js";
@@ -58,6 +59,7 @@ import { parseRichString } from "./shared-strings.js";
 import type { StyleTable } from "./styles.js";
 
 export interface WorksheetReadContext {
+  report?: (warning: Omit<ImportWarning, "part">) => void;
   sharedStrings: (string | RichText)[];
   styles: StyleTable;
   date1904: boolean;
@@ -170,14 +172,21 @@ export function parseWorksheet(ws: Worksheet, xml: string, ctx: WorksheetReadCon
   for (const cf of conditionalFormattings) {
     try {
       ws.addConditionalFormatting(cf);
-    } catch {
+    } catch (error) {
+      if (!(error instanceof InvalidRangeError)) throw error;
+      ctx.report?.({
+        code: "INVALID_REFERENCE",
+        feature: "conditional formatting",
+        ref: cf.ref,
+        message: "Conditional formatting has an invalid range and was skipped",
+      });
       // A malformed sqref fails the model's Range validation (InvalidRangeError) — skip this block
       // rather than let one corrupt conditionalFormatting derail the rest of the read.
     }
   }
   for (const { sqref, dv } of dataValidations) ws.dataValidations.add(sqref, dv);
   if (ctx.rels) {
-    for (const link of hyperlinks) applyHyperlink(ws, link, ctx.rels);
+    for (const link of hyperlinks) applyHyperlink(ws, link, ctx.rels, ctx);
   }
   applyComments(ws, legacyDrawingRid, ctx);
 }
@@ -565,6 +574,13 @@ function collectConditionalFormatting(
       }
       const rule = parseCfRule(c, ruleEl, ctx);
       if (rule !== undefined) rules.push(rule);
+      else
+        ctx.report?.({
+          code: "UNSUPPORTED_FEATURE",
+          feature: "conditional formatting rule",
+          ref: block.attrs.sqref,
+          message: `Rule ${ruleEl.attrs.type ?? "(missing type)"} is unsupported or incomplete and was skipped`,
+        });
     });
   }
 
@@ -904,9 +920,22 @@ function collectHyperlinks(c: XmlCursor, container: string, hyperlinks: Hyperlin
 /** Resolve a hyperlink record to its worksheet-rels target and set the model value on its (top-left,
  *  for a range `ref`) cell, keeping that cell's already-parsed string as the display `text`. A rId
  *  that doesn't resolve (malformed package) is silently skipped. */
-function applyHyperlink(ws: Worksheet, link: HyperlinkRef, rels: Map<string, ResolvedRel>): void {
+function applyHyperlink(
+  ws: Worksheet,
+  link: HyperlinkRef,
+  rels: Map<string, ResolvedRel>,
+  ctx: WorksheetReadContext,
+): void {
   const rel = rels.get(link.rId);
-  if (!rel) return;
+  if (!rel) {
+    ctx.report?.({
+      code: "UNRESOLVED_RELATIONSHIP",
+      feature: "hyperlink",
+      ref: link.rId,
+      message: "Hyperlink has no matching relationship and was skipped",
+    });
+    return;
+  }
 
   const topLeft = link.ref.split(":")[0] ?? link.ref;
   const cell = ws.getCell(topLeft);
@@ -942,6 +971,12 @@ function applyComments(
       ws.getCell(record.ref).note = { texts: record.texts, author: record.author };
     } catch (error) {
       if (!(error instanceof InvalidAddressError)) throw error;
+      ctx.report?.({
+        code: "INVALID_REFERENCE",
+        feature: "comment",
+        ref: record.ref,
+        message: "Comment has an invalid cell reference and was skipped",
+      });
       // Malformed ref (InvalidAddressError from decodeAddress) — skip this comment, keep the rest.
     }
   }

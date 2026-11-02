@@ -12,6 +12,7 @@ const ATTR_PREFIXES: Record<string, string> = {
 export function* namespaceEvents(
   events: Iterable<XmlEvent>,
   allowed: readonly string[],
+  onSkipped?: (name: string, namespace: string | undefined) => void,
 ): Generator<XmlEvent> {
   const scopes: Array<{ bindings: Record<string, string>; blocked: boolean; name: string }> = [];
   let legacy = false;
@@ -38,7 +39,10 @@ export function* namespaceEvents(
         (uri ? !allowed.includes(uri) || (first && uri !== allowed[0]) : !legacy);
       const name = uri ? local : event.name;
       if (!event.selfClosing) scopes.push({ bindings, blocked, name });
-      if (blocked) continue;
+      if (blocked) {
+        if (!parent?.blocked) onSkipped?.(event.name, uri);
+        continue;
+      }
       const attrs: Record<string, string> = {};
       for (const [key, value] of Object.entries(event.attrs)) {
         if (key === "xmlns" || key.startsWith("xmlns:")) continue;

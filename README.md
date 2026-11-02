@@ -136,6 +136,24 @@ Model budgets apply only while importing and reset on each read. They do not res
 The limits bound ZIP bytes and model counts, not exact heap memory consumption. Excel's hard grid
 limits (1,048,576 rows and 16,384 columns per sheet) still apply when an import budget is disabled.
 
+Imports remain tolerant by default. Opt into structured diagnostics when preserving workbook
+features matters:
+
+```ts
+await workbook.xlsx.load(bytes, {
+  onWarning: (warning) => console.warn(warning.code, warning.part, warning.message),
+  strict: true,
+});
+```
+
+`onWarning` runs synchronously with a frozen `ImportWarning` containing `code`, `part`, `feature`,
+`message`, and optional `ref`. The library does not log warnings itself. `strict: true` throws
+`ImportWarningError` (`code: "IMPORT_WARNING"`, `.warning`) after reporting the first warning;
+a failed `load` preserves the receiving workbook. Observer exceptions propagate unchanged.
+Diagnostics cover known discarded charts, tables, pivots, threaded comments, selected workbook/sheet
+settings and foreign XML, missing relationship targets, and selected invalid references or part roots.
+Strict mode is a known-loss check, not full schema validation or a guarantee of lossless round trips.
+
 Numeric and string coordinates use the same bounds, including numeric ranges and row/column edits.
 Out-of-range coordinates throw `InvalidAddressError` or `InvalidRangeError`. Cell numbers and cached
 formula results must be finite, and `Date` values must be valid; assigning, importing, or serializing
