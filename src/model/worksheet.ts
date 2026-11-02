@@ -8,6 +8,13 @@
 
 import { colLetterToNumber, decodeAddress, Range, type RangeSource } from "../address/index.js";
 import {
+  assertColumnNumber,
+  assertRowNumber,
+  assertSpliceBounds,
+  MAX_COL,
+  MAX_ROW,
+} from "../address/limits.js";
+import {
   DuplicateWorksheetNameError,
   InvalidRangeError,
   InvalidWorksheetNameError,
@@ -16,13 +23,14 @@ import {
   WorksheetNameTooLongError,
 } from "../errors.js";
 import type { Cell } from "./cell.js";
-import type { CellValue } from "./cell-value.js";
+import { type CellValue, detectType } from "./cell-value.js";
 import { Column, type ColumnDefn, type ColumnRange } from "./column.js";
 import { type CommentModel, Comments } from "./comment.js";
 import type { ConditionalFormatting } from "./conditional-formatting.js";
 import { type DataValidationModel, DataValidations } from "./data-validation.js";
 import { CellType } from "./enums.js";
 import { cloneAnchor, type ImageAnchor, resolveImageAnchor, type WorksheetImage } from "./image.js";
+import { modelReadBudget } from "./read-budget.js";
 import { Row, type RowModel } from "./row.js";
 import type { Color, Style } from "./style.js";
 import type { RowValues } from "./types.js";
@@ -247,8 +255,10 @@ export class Worksheet implements WorksheetHost {
   // --- rows -------------------------------------------------------------------------------------
 
   getRow(row: number): Row {
+    assertRowNumber(row);
     let r = this._rows.get(row);
     if (!r) {
+      modelReadBudget(this)?.claim("maxRows");
       r = new Row(this, row);
       this._rows.set(row, r);
       if (row > this._highestRow) this._highestRow = row;
@@ -257,17 +267,22 @@ export class Worksheet implements WorksheetHost {
   }
 
   getRows(start: number, length: number): Row[] | undefined {
+    assertRowNumber(start);
+    if (!Number.isSafeInteger(length) || length < 0) throw new InvalidRangeError([start, length]);
     if (length < 1) return undefined;
+    assertRowNumber(start + length - 1);
     const rows: Row[] = [];
     for (let i = 0; i < length; i++) rows.push(this.getRow(start + i));
     return rows;
   }
 
   findRow(row: number): Row | undefined {
+    assertRowNumber(row);
     return this._rows.get(row);
   }
 
   addRow(data: RowData, options?: RowInheritOption): Row {
+    this.validateRowData(data);
     const row = this.getRow(this.rowCount + 1);
     row.values = data as RowValues;
     this.applyInheritance(row, options);
@@ -297,6 +312,16 @@ export class Worksheet implements WorksheetHost {
   }
 
   duplicateRow(rowNum: number, count: number, insert = false): void {
+    assertRowNumber(rowNum);
+    if (
+      !Number.isInteger(count) ||
+      count < 0 ||
+      rowNum + count > MAX_ROW ||
+      (insert && this.rowCount + count > MAX_ROW)
+    ) {
+      throw new InvalidRangeError([rowNum, count]);
+    }
+    if (count === 0) return;
     const snapshot = this.snapshotRow(this.getRow(rowNum));
     if (insert) {
       const blanks: RowData[] = Array.from({ length: count }, () => [] as CellValue[]);
@@ -306,7 +331,11 @@ export class Worksheet implements WorksheetHost {
   }
 
   spliceRows(start: number, count: number, ...inserts: RowData[]): void {
+    assertRowNumber(start);
+    assertSpliceBounds(start, count, inserts.length, this.rowCount, MAX_ROW);
+    for (const values of inserts) this.validateRowData(values);
     const delta = inserts.length - count;
+    this.validateShiftedRefs("row", start, count, delta);
 
     const oldMerges = [...this._merges.values()].map((r) => ({
       top: r.top,
@@ -347,6 +376,40 @@ export class Worksheet implements WorksheetHost {
     }
 
     this.reanchorAnnotations("row", start, count, delta);
+  }
+
+  private validateRowData(data: RowData): void {
+    if (data === null || data === undefined) return;
+    if (Array.isArray(data)) {
+      const offset = data[0] !== undefined ? 1 : 0;
+      data.forEach((value, index) => {
+        if (value === undefined) return;
+        const col = index + offset;
+        if (col < 1) return;
+        assertColumnNumber(col);
+        detectType(value);
+      });
+    } else {
+      for (const [key, value] of Object.entries(data)) {
+        assertColumnNumber(this.toColNumber(key));
+        detectType(value);
+      }
+    }
+  }
+
+  private validateShiftedRefs(
+    axis: "row" | "col",
+    start: number,
+    count: number,
+    delta: number,
+  ): void {
+    const refs = [
+      ...[...this._merges.values()].map((range) => range.range),
+      ...this._comments.model.map((comment) => comment.ref),
+      ...this._dataValidations.model.map((dv) => dv.sqref),
+      ...this._conditionalFormattings.map((cf) => cf.ref),
+    ];
+    for (const ref of refs) shiftRef(ref, axis, start, count, delta);
   }
 
   /** Shift the ref-keyed annotations that don't live on cells — comment refs, data-validation sqrefs,
@@ -470,6 +533,7 @@ export class Worksheet implements WorksheetHost {
   }
 
   private getOrCreateColumn(n: number): Column {
+    assertColumnNumber(n);
     let c = this._columns.get(n);
     if (!c) {
       c = new Column(this, n);
@@ -509,7 +573,17 @@ export class Worksheet implements WorksheetHost {
    *  bridges that gap (docs/MIGRATION.md D7), so ported ExcelJS code keeps working while the core stays
    *  internally consistent. */
   spliceColumns(start: number, count: number, ...inserts: CellValue[][]): void {
+    assertColumnNumber(start);
+    assertSpliceBounds(start, count, inserts.length, this.columnCount, MAX_COL);
+    for (const values of inserts) {
+      values.forEach((value, row) => {
+        if (row === 0 || value === undefined) return;
+        assertRowNumber(row);
+        detectType(value);
+      });
+    }
     const delta = inserts.length - count;
+    this.validateShiftedRefs("col", start, count, delta);
 
     this.eachRow((row) => {
       const rowInserts = inserts.map((colVals) => colVals[row.number] ?? null);
@@ -578,7 +652,10 @@ export class Worksheet implements WorksheetHost {
       const d = decodeAddress(r as string);
       return this.getRow(d.row).getCell(d.col);
     }
-    return this.getRow(r as number).getCell(c);
+    assertRowNumber(r as number);
+    const col = this.toColNumber(c);
+    assertColumnNumber(col);
+    return this.getRow(r as number).getCell(col);
   }
 
   findCell(r: number | string, c?: number | string): Cell | undefined {
@@ -592,6 +669,8 @@ export class Worksheet implements WorksheetHost {
       rowNum = r as number;
       colNum = this.toColNumber(c);
     }
+    assertRowNumber(rowNum);
+    assertColumnNumber(colNum);
     const row = this._rows.get(rowNum);
     return row?.findCell(colNum);
   }
@@ -642,6 +721,7 @@ export class Worksheet implements WorksheetHost {
    *  is forwarded to {@link Cell.merge}: `false` (authoring) copies the master's style onto each
    *  slave, `true` (read / `set model` / merge re-anchoring) leaves each slave's own style intact. */
   private applyMerge(range: Range, ignoreStyle = false): void {
+    modelReadBudget(this)?.claim("maxMergeCells", range.count);
     const master = this.getCell(range.top, range.left);
     range.forEachAddress((_addr, row, col) => {
       if (row === range.top && col === range.left) return;

@@ -10,6 +10,7 @@
 //   merge-slave / styled-empty -> empty <c> carrying only its style   null (no style) -> skipped
 
 import { decodeEx, Range } from "../../address/index.js";
+import { assertFiniteScalar } from "../../model/cell-value.js";
 import type {
   CellModel,
   CommentModel,
@@ -319,6 +320,8 @@ function renderCell(
   hyperlinks: HyperlinkRecord[],
   sharedFormulas?: SharedFormulaPlan,
 ): string {
+  assertFiniteScalar(cell.value);
+  assertFiniteScalar(cell.result);
   const styleId = cell.style ? ctx.styles.addStyle(cell.style) : 0;
   const r = cell.address;
 

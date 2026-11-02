@@ -104,10 +104,19 @@ the browser build automatically; buffer and async-iterable APIs require no Node 
 File APIs in that build reject with `UnsupportedFeatureError`.
 
 `writeWorkbookBuffer` accepts a `WriteOptions` (`useSharedStrings`, `useStyles`); the read
-functions accept `ReadOptions` with configurable ZIP allocation limits.
+functions accept `ReadOptions` with configurable ZIP and model allocation limits.
 
 Reads default to 128 MiB of compressed input, 10,000 ZIP entries, 256 MiB per expanded entry,
-and 1 GiB of total expanded entries. Override these for larger trusted workbooks:
+and 1 GiB of total expanded entries. Model limits are shared across all worksheets in each import:
+
+| Option | Default | Counts |
+| --- | ---: | --- |
+| `maxCells` | 1,000,000 | Allocated cell objects, including styled blanks, merge slaves, and cells created by comments or hyperlinks |
+| `maxRows` | 1,048,576 | Allocated row objects; gaps before a sparse row do not count |
+| `maxMergeCells` | 100,000 | Sum of merged-range areas, including their masters; checked before enumerating each range |
+| `maxColumnDefinitions` | 100,000 | Expanded `<col min="…" max="…">` definitions, including repeated ranges |
+
+Existing cells are counted once even when a merge also covers them. Override these for larger trusted workbooks:
 
 ```ts
 await workbook.xlsx.load(bytes, {
@@ -115,13 +124,23 @@ await workbook.xlsx.load(bytes, {
   maxEntries: 20_000,
   maxEntryBytes: 512 * 1024 * 1024,
   maxTotalBytes: 2 * 1024 * 1024 * 1024,
+  maxCells: 5_000_000,
+  maxMergeCells: 1_000_000,
 });
 ```
 
 Each limit accepts `Infinity` to disable it. Exceeding a budget throws `ReadLimitError` with
 `code: "READ_LIMIT_EXCEEDED"`, `limit`, `maximum`, and `actual`. These options also work with
 `readFile`, byte-stream `read`, and the free functions; streamed input stops at `maxInputBytes`.
-The limits bound ZIP byte allocations, not the memory occupied by the resulting workbook model.
+Model budgets apply only while importing and reset on each read. They do not restrict later edits.
+The limits bound ZIP bytes and model counts, not exact heap memory consumption. Excel's hard grid
+limits (1,048,576 rows and 16,384 columns per sheet) still apply when an import budget is disabled.
+
+Numeric and string coordinates use the same bounds, including numeric ranges and row/column edits.
+Out-of-range coordinates throw `InvalidAddressError` or `InvalidRangeError`. Cell numbers and cached
+formula results must be finite, and `Date` values must be valid; assigning, importing, or serializing
+invalid values throws `InvalidCellValueError`. The string `"NaN"` and explicit Excel error values
+such as `{ error: "#NUM!" }` remain supported.
 
 ## Streaming writes for large workbooks
 

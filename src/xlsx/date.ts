@@ -2,6 +2,9 @@
 // Self-contained: no dayjs. Excel stores dates as day serials, and we honor both epoch systems plus
 // the deliberate 1900 leap-year bug that Excel preserves for Lotus 1-2-3 compatibility.
 
+import { InvalidCellValueError } from "../errors.js";
+import { assertFiniteScalar } from "../model/cell-value.js";
+
 const MS_PER_DAY = 86_400_000;
 
 /** 1900 date system: this UTC instant is serial 0, so 1899-12-31 + serial days => the date.
@@ -17,6 +20,8 @@ const LEAP_BUG_SERIAL = 60;
 
 /** Convert a `Date` to its Excel day serial (fractional part carries the time of day). */
 export function dateToSerial(d: Date, date1904 = false): number {
+  if (!(d instanceof Date)) throw new InvalidCellValueError(d);
+  assertFiniteScalar(d);
   if (date1904) {
     return (d.getTime() - EPOCH_1904) / MS_PER_DAY;
   }
@@ -27,11 +32,17 @@ export function dateToSerial(d: Date, date1904 = false): number {
 
 /** Convert an Excel day serial back to a `Date` (UTC-based instant). */
 export function serialToDate(serial: number, date1904 = false): Date {
+  if (typeof serial !== "number") throw new InvalidCellValueError(serial);
+  assertFiniteScalar(serial);
   if (date1904) {
-    return new Date(EPOCH_1904 + serial * MS_PER_DAY);
+    const date = new Date(EPOCH_1904 + serial * MS_PER_DAY);
+    if (!Number.isFinite(date.getTime())) throw new InvalidCellValueError(serial);
+    return date;
   }
   // Undo the phantom-day shift for serials past the bug; serial 60 itself resolves to 1900-02-29,
   // which JS normalizes to 1900-03-01 (the same instant serial 61 also maps to).
   const adjusted = serial > LEAP_BUG_SERIAL ? serial - 1 : serial;
-  return new Date(EPOCH_1900 + adjusted * MS_PER_DAY);
+  const date = new Date(EPOCH_1900 + adjusted * MS_PER_DAY);
+  if (!Number.isFinite(date.getTime())) throw new InvalidCellValueError(serial);
+  return date;
 }

@@ -62,6 +62,17 @@ export type StoredValue =
   | { type: CellType.Merge; master: string }
   | { type: CellType.SharedString; value: number };
 
+/** Reject numeric values that cannot be represented as finite spreadsheet scalars. Also used at
+ * serialization time because callers may mutate an assigned Date or cached-result object later. */
+export function assertFiniteScalar(value: unknown): void {
+  if (
+    (typeof value === "number" && !Number.isFinite(value)) ||
+    (value instanceof Date && !Number.isFinite(value.getTime()))
+  ) {
+    throw new InvalidCellValueError(value);
+  }
+}
+
 /**
  * Duck-type a `CellValue` into a `CellType`, mirroring ExcelJS's `Value.getType` check order:
  * null → string → number → boolean → date → hyperlink (`text`&`hyperlink`) → formula
@@ -69,13 +80,18 @@ export type StoredValue =
  * anything else.
  */
 export function detectType(v: CellValue): CellType {
+  assertFiniteScalar(v);
   if (v === null) return CellType.Null;
   if (typeof v === "string") return CellType.String;
   if (typeof v === "number") return CellType.Number;
   if (typeof v === "boolean") return CellType.Boolean;
   if (v instanceof Date) return CellType.Date;
+  if (typeof v !== "object") throw new InvalidCellValueError(v);
   if ("text" in v && "hyperlink" in v) return CellType.Hyperlink;
-  if ("formula" in v || "sharedFormula" in v) return CellType.Formula;
+  if ("formula" in v || "sharedFormula" in v) {
+    assertFiniteScalar((v as CellFormula).result);
+    return CellType.Formula;
+  }
   if ("richText" in v) return CellType.RichText;
   if ("error" in v) return CellType.Error;
   throw new InvalidCellValueError(v);

@@ -59,6 +59,11 @@ Rows must be committed once, in creation order, before the worksheet commits. In
 use the same validation as buffered workbooks. Destination errors or premature closes reject pending
 `flush()`/`commit()` calls and stop further row production.
 
+If `addRow()` rejects an invalid value or column key, it does not consume a row number. Supply a
+corrected payload and continue. Numeric cell values and cached formula results must be finite, Dates
+must be valid, and rows/columns must fit Excel's grid. Values mutated after assignment are checked
+again before the row commits.
+
 Shared-formula masters require `shareType: "shared"`, a formula, and the complete `ref` up front;
 slaves must follow the master and lie within that range. Array masters require `shareType: "array"`,
 a formula, and `ref`. A slave referencing an undeclared master is rejected instead of emitting an empty

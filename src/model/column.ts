@@ -6,6 +6,8 @@
 // so they're deliberately excluded from that comparison and from `ColumnRange`.
 
 import { colNumberToLetter } from "../address/index.js";
+import { assertColumnNumber } from "../address/limits.js";
+import { InvalidRangeError } from "../errors.js";
 import type { Cell } from "./cell.js";
 import type { CellValue } from "./cell-value.js";
 import type { Alignment, Borders, Fill, Font, Protection, Style } from "./style.js";
@@ -59,6 +61,7 @@ export class Column {
     public readonly number: number,
     defn?: Partial<ColumnDefn> | false,
   ) {
+    assertColumnNumber(number);
     if (defn) {
       if (defn.key !== undefined) this.key = defn.key;
       if (defn.width !== undefined) this.width = defn.width;
@@ -281,6 +284,12 @@ export class Column {
   /** Expands `<col min max>` ranges back into individual Columns. */
   static fromModel(host: WorksheetHost, cols: ColumnRange[]): Column[] | null {
     if (cols.length === 0) return null;
+
+    for (const range of cols) {
+      assertColumnNumber(range.min);
+      assertColumnNumber(range.max);
+      if (range.max < range.min) throw new InvalidRangeError([range.min, range.max]);
+    }
 
     const columns: Column[] = [];
     for (const range of cols) {
