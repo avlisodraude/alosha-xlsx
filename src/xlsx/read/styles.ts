@@ -20,6 +20,8 @@ import type {
   Style,
 } from "../../model/index.js";
 import { parseXml } from "../../xml/index.js";
+import { namespaceEvents } from "../../xml/namespaces.js";
+import { NS } from "../parts/constants.js";
 import { BUILTIN_NUMFMT_BY_CODE } from "../styles.js";
 
 /** The reverse of {@link BUILTIN_NUMFMT_BY_CODE}: reserved numFmtId -> canonical format code. */
@@ -444,7 +446,7 @@ interface Element {
 function parseTree(xml: string): Element | undefined {
   const root: Element = { name: "#root", attrs: {}, children: [] };
   const stack: Element[] = [root];
-  for (const ev of parseXml(xml)) {
+  for (const ev of namespaceEvents(parseXml(xml), [NS.spreadsheetml])) {
     const top = stack[stack.length - 1];
     if (top === undefined) break;
     if (ev.kind === "open") {

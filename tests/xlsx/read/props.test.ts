@@ -23,7 +23,7 @@ describe("applyCoreProps", () => {
   it("applies creator, created and does not set unset fields", () => {
     const wb = new Workbook();
     const xml =
-      '<cp:coreProperties xmlns:cp="cp" xmlns:dc="dc" xmlns:dcterms="dcterms" xmlns:xsi="xsi">' +
+      '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">' +
       "<dc:creator>Eduardo</dc:creator>" +
       '<dcterms:created xsi:type="dcterms:W3CDTF">2026-01-02T03:04:05Z</dcterms:created>' +
       '<dcterms:modified xsi:type="dcterms:W3CDTF">2026-02-03T04:05:06Z</dcterms:modified>' +
@@ -38,7 +38,7 @@ describe("applyCoreProps", () => {
   it("applies every optional metadata field", () => {
     const wb = new Workbook();
     const xml =
-      '<cp:coreProperties xmlns:cp="cp" xmlns:dc="dc" xmlns:dcterms="dcterms">' +
+      '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/">' +
       "<dc:title>My Title</dc:title>" +
       "<dc:subject>My Subject</dc:subject>" +
       "<dc:description>My Description</dc:description>" +

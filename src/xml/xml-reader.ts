@@ -3,10 +3,11 @@
 // rather than pulling in a DOM/SAX library. Not a general XML engine — it targets the well-formed
 // subset Excel/LibreOffice/our own writer emit (no DTDs, no external entities).
 
+import { namespaceEvents } from "./namespaces.js";
 import { decodeXString, isXStringAttribute, isXStringElement } from "./xstring.js";
 
-/** One token from the document in source order. Prefixed names are kept verbatim ("r:id",
- *  "cp:coreProperties") — OOXML fixes its namespace prefixes, so literal matching is sufficient. */
+/** One token from the document in source order. parseXml preserves qualified names verbatim;
+ * namespace-aware cursors resolve them by URI and scope for individual OOXML part readers. */
 export type XmlEvent =
   | { kind: "open"; name: string; attrs: Record<string, string>; selfClosing: boolean }
   | { kind: "text"; text: string }
@@ -173,8 +174,7 @@ export function* parseXml(xml: string): Generator<XmlEvent> {
   }
 }
 
-/** Strips a namespace prefix (`"cp:coreProperties"` → `"coreProperties"`) for the few comparisons that
- *  must be prefix-agnostic. Most matching is literal — OOXML's prefixes are fixed by convention. */
+/** Strips a namespace prefix (`"cp:coreProperties"` → `"coreProperties"`). */
 export function localName(name: string): string {
   const idx = name.indexOf(":");
   return idx === -1 ? name : name.slice(idx + 1);
@@ -195,8 +195,8 @@ export interface XmlCursor {
 }
 
 /** Builds a {@link XmlCursor} over `xml`. */
-export function cursor(xml: string): XmlCursor {
-  const gen = parseXml(xml);
+export function cursor(xml: string, namespaces?: readonly string[]): XmlCursor {
+  const gen = namespaces ? namespaceEvents(parseXml(xml), namespaces) : parseXml(xml);
   let lookahead: XmlEvent | undefined;
   let hasLookahead = false;
 

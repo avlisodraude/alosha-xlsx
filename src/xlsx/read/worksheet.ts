@@ -51,7 +51,7 @@ import {
 import { modelReadBudget } from "../../model/read-budget.js";
 import { cursor, localName, type XmlCursor, type XmlEvent } from "../../xml/index.js";
 import { serialToDate } from "../date.js";
-import { REL_TYPE } from "../parts/constants.js";
+import { NS, REL_TYPE } from "../parts/constants.js";
 import { parseComments } from "./comments.js";
 import type { ResolvedRel } from "./package.js";
 import { parseRichString } from "./shared-strings.js";
@@ -87,7 +87,7 @@ interface DataValidationRef {
 
 /** Populate an already-created {@link Worksheet} from its sheetN.xml. */
 export function parseWorksheet(ws: Worksheet, xml: string, ctx: WorksheetReadContext): void {
-  const c = cursor(xml);
+  const c = cursor(xml, [NS.spreadsheetml]);
   let ev = c.next();
   while (ev && !(ev.kind === "open" && localName(ev.name) === "worksheet")) ev = c.next();
   if (ev?.kind !== "open" || ev.selfClosing) return;
@@ -947,8 +947,8 @@ function applyComments(
   }
 }
 
-/** The `r:id` relationship reference on a `<hyperlink>` element. OOXML fixes the `r` prefix, but
- *  fall back to any `*:id` attribute so an unconventional namespace prefix still resolves. */
+/** Relationship attributes are canonicalized to r:id by URI. The fallback supports legacy
+ *  namespace-free fragments without interpreting foreign namespaced attributes as ids. */
 function relId(el: OpenEvent): string {
   const direct = el.attrs["r:id"];
   if (direct !== undefined) return direct;

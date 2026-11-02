@@ -142,6 +142,14 @@ formula results must be finite, and `Date` values must be valid; assigning, impo
 invalid values throws `InvalidCellValueError`. The string `"NaN"` and explicit Excel error values
 such as `{ error: "#NUM!" }` remain supported.
 
+`decodeAddress()` returns a frozen, cached object with readonly coordinates. Use `{ ...decoded }`
+when you need an editable copy. Quoted sheet references support Excel's doubled-apostrophe syntax,
+for example `decodeEx("'O''Brien'!$B$2")` returns `sheetName: "O'Brien"`.
+
+Readers resolve supported OOXML namespaces by URI, independently of prefix spelling. Namespace
+declarations follow XML scope, relationship attributes are resolved by namespace, and foreign
+namespace subtrees are skipped rather than interpreted as worksheet data.
+
 ## Streaming writes for large workbooks
 
 For exports too big to hold in memory, the streaming `WorkbookWriter` (ExcelJS's

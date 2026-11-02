@@ -6,9 +6,9 @@ import { assertColumnNumber, assertRowNumber, MAX_COL, MAX_ROW } from "./limits.
 
 /** 1-based rows/cols everywhere in this module's public surface. */
 export interface Decoded {
-  row: number;
-  col: number;
-  address: string;
+  readonly row: number;
+  readonly col: number;
+  readonly address: string;
 }
 
 /** `decodeEx` result: adds the absolute `$col$row` form and an optional sheet qualifier. */
@@ -19,7 +19,7 @@ export interface DecodedEx extends Decoded {
 
 const LETTER_RE = /^[A-Za-z]+$/;
 const ADDRESS_RE = /^([A-Za-z]+)(\d+)$/;
-const SHEET_PREFIX_RE = /^(?:'([^']*)'|([^'!]+))!/;
+const SHEET_PREFIX_RE = /^(?:'((?:[^']|'')*)'|([^'!]+))!/;
 const CELL_REF_RE = /^\$?([A-Za-z]+)\$?(\d+)$/;
 
 /** Upper bound on {@link decodeAddress}'s memo. The column caches below are naturally bounded by
@@ -97,7 +97,7 @@ export function decodeAddress(address: string): Decoded {
     throw new InvalidAddressError(address);
   }
 
-  const decoded: Decoded = { row, col, address: `${letters.toUpperCase()}${row}` };
+  const decoded: Decoded = Object.freeze({ row, col, address: `${letters.toUpperCase()}${row}` });
   if (decodeAddressCache.size >= DECODE_ADDRESS_CACHE_MAX) {
     // FIFO eviction: a Map iterates keys in insertion order, so the first is the oldest.
     const oldest = decodeAddressCache.keys().next().value;
@@ -114,7 +114,7 @@ export function decodeEx(address: string): DecodedEx {
 
   const sheetMatch = SHEET_PREFIX_RE.exec(address);
   if (sheetMatch) {
-    sheetName = sheetMatch[1] ?? sheetMatch[2];
+    sheetName = sheetMatch[1] !== undefined ? sheetMatch[1].replace(/''/g, "'") : sheetMatch[2];
     rest = address.slice(sheetMatch[0].length);
   }
 

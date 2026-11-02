@@ -24,23 +24,26 @@ describe("parseSharedStrings", () => {
   });
 
   it("preserves significant whitespace tagged with xml:space=preserve", () => {
-    const xml = '<sst xmlns="ns"><si><t xml:space="preserve"> x </t></si></sst>';
+    const xml =
+      '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t xml:space="preserve"> x </t></si></sst>';
     expect(parseSharedStrings(xml)).toEqual([" x "]);
   });
 
   it("decodes escaped entities in text content", () => {
-    const xml = '<sst xmlns="ns"><si><t>a&lt;b&gt;&amp;c</t></si></sst>';
+    const xml =
+      '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>a&lt;b&gt;&amp;c</t></si></sst>';
     expect(parseSharedStrings(xml)).toEqual(["a<b>&c"]);
   });
 
   it("treats a self-closing <t> as an empty string", () => {
-    const xml = '<sst xmlns="ns"><si><t/></si></sst>';
+    const xml =
+      '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t/></si></sst>';
     expect(parseSharedStrings(xml)).toEqual([""]);
   });
 
   it("parses <r> runs into a RichText, with a plain run carrying no font", () => {
     const xml =
-      '<sst xmlns="ns"><si><r><rPr><b/><color rgb="FFFF0000"/></rPr><t>bold</t></r>' +
+      '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><r><rPr><b/><color rgb="FFFF0000"/></rPr><t>bold</t></r>' +
       '<r><t xml:space="preserve"> plain</t></r></si></sst>';
     const [entry] = parseSharedStrings(xml);
     expect(entry).toEqual({
@@ -53,7 +56,7 @@ describe("parseSharedStrings", () => {
 
   it("inverts renderRunProps: name, size, italic, underline, scheme", () => {
     const xml =
-      '<sst xmlns="ns"><si><r><rPr><rFont val="Arial"/><i/><sz val="12"/>' +
+      '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><r><rPr><rFont val="Arial"/><i/><sz val="12"/>' +
       '<u val="double"/></rPr><t>styled</t></r></si></sst>';
     const [entry] = parseSharedStrings(xml) as [RichText];
     expect(entry.richText[0]).toEqual({
@@ -63,14 +66,15 @@ describe("parseSharedStrings", () => {
   });
 
   it("reads a bare <u/> as underline: true", () => {
-    const xml = '<sst xmlns="ns"><si><r><rPr><u/></rPr><t>x</t></r></si></sst>';
+    const xml =
+      '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><r><rPr><u/></rPr><t>x</t></r></si></sst>';
     const [entry] = parseSharedStrings(xml) as [RichText];
     expect(entry.richText[0]?.font?.underline).toBe(true);
   });
 
   it("reads theme and indexed colors", () => {
     const xml =
-      '<sst xmlns="ns"><si><r><rPr><color theme="4"/></rPr><t>a</t></r></si>' +
+      '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><r><rPr><color theme="4"/></rPr><t>a</t></r></si>' +
       '<si><r><rPr><color indexed="8"/></rPr><t>b</t></r></si></sst>';
     const [a, b] = parseSharedStrings(xml) as [RichText, RichText];
     expect(a.richText[0]?.font?.color).toEqual({ theme: 4 });
@@ -79,7 +83,7 @@ describe("parseSharedStrings", () => {
 
   it("reads vertAlign, scheme, family, charset, strike, outline", () => {
     const xml =
-      '<sst xmlns="ns"><si><r><rPr><vertAlign val="superscript"/><scheme val="minor"/>' +
+      '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><r><rPr><vertAlign val="superscript"/><scheme val="minor"/>' +
       '<family val="2"/><charset val="1"/><strike/><outline/></rPr><t>x</t></r></si></sst>';
     const [entry] = parseSharedStrings(xml) as [RichText];
     expect(entry.richText[0]?.font).toEqual({
